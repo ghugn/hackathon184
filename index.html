@@ -1,0 +1,161 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="description" content="Hotfix: The Game - A 2D platformer where the AI patches your shortcuts. Can you outrun the code?">
+    <title>Hotfix: The Game — Speedrun the Codebase</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Fira+Code:wght@300;400;500;600;700&family=JetBrains+Mono:wght@300;400;500;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div id="app">
+        <!-- Title Screen -->
+        <div id="title-screen">
+            <div class="title-container">
+                <div class="title-prefix">// </div>
+                <h1 class="title-text">HOTFIX<span class="title-colon">:</span> <span class="title-sub">The Game</span></h1>
+                <div class="title-tagline">// Can you outrun the code?</div>
+                <div class="version-tag">v0.1.0-alpha</div>
+                <div class="title-instructions">
+                    <div class="key-row"><span class="key">A</span><span class="key">D</span> Move</div>
+                    <div class="key-row"><span class="key">W</span> / <span class="key">SPACE</span> Jump</div>
+                    <div class="key-row"><span class="key">SHIFT</span> Dash</div>
+                </div>
+                <div class="name-input-row">
+                    <span class="name-label">HANDLE:</span>
+                    <input type="text" id="player-name" class="name-input" placeholder="anonymous" maxlength="16" spellcheck="false" autocomplete="off">
+                </div>
+                <button id="start-btn" class="neon-btn">
+                    <span class="btn-bracket">{</span> START <span class="btn-bracket">}</span>
+                </button>
+                <button id="leaderboard-btn" class="neon-btn neon-btn-secondary">
+                    <span class="btn-bracket">[</span> LEADERBOARD <span class="btn-bracket">]</span>
+                </button>
+                <div class="title-hint">Press ENTER to start</div>
+            </div>
+        </div>
+
+        <!-- Game Screen -->
+        <div id="game-screen" class="hidden">
+            <div id="game-layout">
+                <!-- HUD Top Bar -->
+                <div id="hud-bar">
+                    <div id="hud-left">
+                        <span class="hud-label">STAGE:</span>
+                        <span id="hud-stage" class="hud-value hud-stage">001</span>
+                        <span class="hud-sep">|</span>
+                        <span class="hud-label">RUN:</span>
+                        <span id="hud-run" class="hud-value">#001</span>
+                        <span class="hud-sep">|</span>
+                        <span class="hud-label">HOTFIX:</span>
+                        <span id="hud-version" class="hud-value">v1.0.0</span>
+                    </div>
+                    <div id="hud-center">
+                        <span class="hud-label">TIME:</span>
+                        <span id="hud-timer" class="hud-value hud-timer">00:00.000</span>
+                    </div>
+                    <div id="hud-right">
+                        <span class="hud-label">PATCHES:</span>
+                        <span id="hud-patches" class="hud-value hud-patches">0</span>
+                        <span class="hud-sep">|</span>
+                        <span class="hud-label">BEST:</span>
+                        <span id="hud-best" class="hud-value">--:--.---</span>
+                    </div>
+                </div>
+
+                <div id="game-area">
+                    <!-- Canvas -->
+                    <canvas id="game-canvas"></canvas>
+
+                    <!-- Console Log Panel -->
+                    <div id="console-panel">
+                        <div id="console-header">
+                            <span class="console-tab active">CONSOLE</span>
+                            <span class="console-tab">PROBLEMS</span>
+                            <span class="console-tab">OUTPUT</span>
+                        </div>
+                        <div id="console-output"></div>
+                    </div>
+                </div>
+
+                <!-- Status Bar -->
+                <div id="status-bar">
+                    <span id="status-left">
+                        <span class="status-icon">⬤</span> RUNTIME: ACTIVE
+                    </span>
+                    <span id="status-center">
+                        Ln <span id="status-line">1</span>, Col <span id="status-col">1</span>
+                    </span>
+                    <span id="status-right">
+                        UTF-8 &nbsp; JavaScript &nbsp; Spaces: 4
+                    </span>
+                </div>
+            </div>
+        </div>
+
+        <!-- Death / Respawn Overlay -->
+        <div id="death-overlay" class="hidden">
+            <div class="death-content">
+                <div class="death-icon">✕</div>
+                <div class="death-title">RUNTIME ERROR</div>
+                <div id="death-message" class="death-msg">Process terminated unexpectedly</div>
+                <div id="death-score" class="death-score"></div>
+                <div class="death-hint">Press <span class="key">R</span> to respawn &nbsp;|&nbsp; <span class="key">Q</span> quit &amp; save score</div>
+            </div>
+        </div>
+
+        <!-- Win Overlay -->
+        <div id="win-overlay" class="hidden">
+            <div class="win-content">
+                <div class="win-icon">✓</div>
+                <div class="win-title">COMMIT SUCCESSFUL</div>
+                <div id="win-time" class="win-time">00:00.000</div>
+                <div id="win-message" class="win-msg">Changes pushed to main branch</div>
+                <div class="win-hint">Press <span class="key">R</span> for next stage (AI is adapting...)</div>
+            </div>
+        </div>
+
+        <!-- Loading Overlay -->
+        <div id="loading-overlay" class="hidden">
+            <div class="loading-content">
+                <div class="loading-header">
+                    <span class="loading-spinner">⟳</span>
+                    BUILDING STAGE <span id="loading-stage-num">002</span>
+                </div>
+                <div id="loading-terminal"></div>
+                <div class="loading-progress-bar">
+                    <div id="loading-bar"></div>
+                </div>
+                <div id="loading-status" class="loading-status">Initializing...</div>
+            </div>
+        </div>
+
+        <!-- Leaderboard Overlay -->
+        <div id="leaderboard-overlay" class="hidden">
+            <div class="lb-content">
+                <div class="lb-header">
+                    <span class="lb-title">// LEADERBOARD</span>
+                    <button id="lb-close" class="lb-close-btn">✕</button>
+                </div>
+                <div class="lb-columns">
+                    <span class="lb-col-head">#</span>
+                    <span class="lb-col-head">HANDLE</span>
+                    <span class="lb-col-head">STAGE</span>
+                    <span class="lb-col-head">DIST %</span>
+                    <span class="lb-col-head">SCORE</span>
+                </div>
+                <div id="lb-entries"></div>
+                <div class="lb-footer">
+                    <span class="lb-footer-note">Scores saved locally. Top 20 shown.</span>
+                    <button id="lb-clear" class="lb-clear-btn">CLEAR ALL</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="game.js"></script>
+</body>
+</html>
