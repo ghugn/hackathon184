@@ -3682,12 +3682,7 @@ function startGame() {
     if (gameState !== 'title') return;
 
     playerName = (playerNameInput.value.trim() || 'anonymous').substring(0, 16);
-    
-    // 🔑 CHECK ADMIN MODE
-    adminMode = playerNameInput.value.trim() === 'admin12321';
-    if (adminMode) {
-        logConsole('[ADMIN]: 🎮 Cheat mode enabled. Hazards disabled, auto-win on void/timeout.', 'warning');
-    }
+    const isAdmin = playerNameInput.value.trim() === 'admin12321';
     
     localStorage.setItem('hotfix_player_name', playerName);
     beginCampaignRun();
@@ -3707,6 +3702,13 @@ function startGame() {
     logConsole('-'.repeat(40), 'info');
 
     resetCampaignState();
+
+    // 🔑 CHECK ADMIN MODE (must be after resetCampaignState which clears adminMode)
+    adminMode = isAdmin;
+    if (adminMode) {
+        logConsole('[ADMIN]: 🎮 Cheat mode enabled. Hazards disabled, auto-win on void/timeout.', 'warning');
+    }
+
     advanceToNextStage();
 }
 
