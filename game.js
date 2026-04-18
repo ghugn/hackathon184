@@ -1498,6 +1498,106 @@ function buildMixedGauntlet(archetype) {
     return finishStage(archetype, [spawn, low1, high1, low2, high2, floor, tower, tower2, finalRun, goalPlat], spawn, goalPlat, bugSlots);
 }
 
+function buildZigzagGauntlet(archetype) {
+    const ground = canvas.height - 56;
+
+    const spawn = createPlatform(30, ground, 190, 'spawn', 'low');
+    const p1 = createPlatform(280, ground - 90, 96, 'main', 'high');
+    const p2 = createPlatform(480, ground - 18, 100, 'main', 'low');
+    const p3 = createPlatform(680, ground - 110, 92, 'main', 'high');
+    const p4 = createPlatform(880, ground - 24, 98, 'main', 'low');
+    const p5 = createPlatform(1080, ground - 130, 88, 'main', 'high');
+    const p6 = createPlatform(1280, ground - 36, 96, 'main', 'low');
+    const p7 = createPlatform(1480, ground - 150, 86, 'shortcut', 'high');
+    const goalPlat = createPlatform(1700, ground - 80, 160, 'goal', 'high');
+
+    const bugSlots = [
+        makeSurfaceSlot(p1, 0.5, 'high', ['jump'], 1.6, ['spike', 'laser'], 8),
+        makeSurfaceSlot(p2, 0.4, 'low', ['speed', 'hesitation'], 1.4, ['bug', 'crawler'], 8),
+        makeSurfaceSlot(p3, 0.6, 'high', ['jump', 'dash'], 1.8, ['laser', 'spike'], 9),
+        makeSurfaceSlot(p4, 0.5, 'low', ['speed'], 1.5, ['turret', 'bug'], 9),
+        makeSurfaceSlot(p5, 0.45, 'high', ['shortcut', 'jump'], 1.9, ['laser', 'spike'], 10),
+        makeSurfaceSlot(p6, 0.55, 'low', ['hesitation'], 1.6, ['crawler', 'turret'], 10),
+        makeSurfaceSlot(p7, 0.5, 'high', ['shortcut'], 2.0, ['laser'], 11),
+    ];
+
+    return finishStage(archetype, [spawn, p1, p2, p3, p4, p5, p6, p7, goalPlat], spawn, goalPlat, bugSlots);
+}
+
+function buildSkylineRush(archetype) {
+    const ground = canvas.height - 56;
+
+    const spawn = createPlatform(30, ground, 200, 'spawn', 'low');
+    const p1 = createPlatform(310, ground - 68, 88, 'main', 'mid');
+    const p2 = createPlatform(530, ground - 136, 84, 'main', 'high');
+    const p3 = createPlatform(740, ground - 190, 80, 'main', 'high');
+    const p4 = createPlatform(960, ground - 142, 86, 'main', 'high');
+    const p5 = createPlatform(1170, ground - 86, 90, 'main', 'mid');
+    const p6 = createPlatform(1400, ground - 156, 82, 'shortcut', 'high');
+    const goalPlat = createPlatform(1620, ground - 200, 150, 'goal', 'high');
+
+    const bugSlots = [
+        makeSurfaceSlot(p1, 0.5, 'mid', ['jump'], 1.5, ['spike', 'bug'], 9),
+        makeSurfaceSlot(p2, 0.45, 'high', ['jump', 'dash'], 1.8, ['laser', 'spike'], 9),
+        makeSurfaceSlot(p3, 0.5, 'high', ['shortcut'], 2.0, ['laser'], 10),
+        makeSurfaceSlot(p4, 0.55, 'high', ['dash'], 1.7, ['spike', 'laser'], 10),
+        makeSurfaceSlot(p5, 0.4, 'mid', ['hesitation', 'speed'], 1.6, ['turret', 'crawler'], 11),
+        makeSurfaceSlot(p6, 0.5, 'high', ['shortcut', 'jump'], 2.1, ['laser', 'spike'], 11),
+    ];
+
+    return finishStage(archetype, [spawn, p1, p2, p3, p4, p5, p6, goalPlat], spawn, goalPlat, bugSlots);
+}
+
+function buildCascadeDrop(archetype) {
+    const ground = canvas.height - 56;
+
+    const spawn = createPlatform(30, ground - 180, 200, 'spawn', 'high');
+    const p1 = createPlatform(300, ground - 140, 92, 'main', 'high');
+    const p2 = createPlatform(510, ground - 96, 88, 'main', 'mid');
+    const p3 = createPlatform(720, ground - 48, 86, 'main', 'low');
+    const p4 = createPlatform(940, ground - 8, 100, 'main', 'low');
+    const p5 = createPlatform(1150, ground - 66, 84, 'main', 'mid');
+    const p6 = createPlatform(1370, ground - 132, 82, 'main', 'high');
+    const goalPlat = createPlatform(1580, ground - 4, 170, 'goal', 'low');
+
+    const bugSlots = [
+        makeSurfaceSlot(p1, 0.5, 'high', ['jump'], 1.6, ['spike', 'laser'], 9),
+        makeSurfaceSlot(p2, 0.55, 'mid', ['speed'], 1.4, ['bug', 'turret'], 9),
+        makeSurfaceSlot(p3, 0.45, 'low', ['hesitation'], 1.5, ['crawler', 'bug'], 10),
+        makeSurfaceSlot(p4, 0.5, 'low', ['speed', 'dash'], 1.7, ['turret', 'laser'], 10),
+        makeSurfaceSlot(p5, 0.4, 'mid', ['jump', 'dash'], 1.8, ['laser', 'spike'], 11),
+        makeSurfaceSlot(p6, 0.5, 'high', ['shortcut'], 2.0, ['laser', 'spike'], 11),
+    ];
+
+    return finishStage(archetype, [spawn, p1, p2, p3, p4, p5, p6, goalPlat], spawn, goalPlat, bugSlots);
+}
+
+function buildNarrowSpine(archetype) {
+    const ground = canvas.height - 56;
+
+    const spawn = createPlatform(30, ground, 180, 'spawn', 'low');
+    const p1 = createPlatform(280, ground - 42, 74, 'main', 'mid');
+    const p2 = createPlatform(460, ground - 84, 70, 'main', 'high');
+    const p3 = createPlatform(650, ground - 38, 72, 'main', 'mid');
+    const p4 = createPlatform(840, ground - 98, 68, 'main', 'high');
+    const p5 = createPlatform(1020, ground - 52, 70, 'main', 'mid');
+    const p6 = createPlatform(1210, ground - 114, 66, 'shortcut', 'high');
+    const p7 = createPlatform(1400, ground - 62, 72, 'main', 'mid');
+    const goalPlat = createPlatform(1600, ground - 128, 140, 'goal', 'high');
+
+    const bugSlots = [
+        makeSurfaceSlot(p1, 0.5, 'mid', ['jump'], 1.5, ['spike'], 10),
+        makeSurfaceSlot(p2, 0.5, 'high', ['jump', 'dash'], 1.8, ['laser', 'spike'], 10),
+        makeSurfaceSlot(p3, 0.5, 'mid', ['speed'], 1.4, ['bug', 'crawler'], 10),
+        makeSurfaceSlot(p4, 0.5, 'high', ['shortcut'], 2.0, ['laser'], 11),
+        makeSurfaceSlot(p5, 0.5, 'mid', ['hesitation'], 1.6, ['turret', 'bug'], 11),
+        makeSurfaceSlot(p6, 0.5, 'high', ['shortcut', 'dash'], 2.2, ['laser', 'spike'], 12),
+        makeSurfaceSlot(p7, 0.5, 'mid', ['speed'], 1.7, ['crawler', 'turret'], 12),
+    ];
+
+    return finishStage(archetype, [spawn, p1, p2, p3, p4, p5, p6, p7, goalPlat], spawn, goalPlat, bugSlots);
+}
+
 const DIRECTOR_LABELS = {
     flow: 'Flow Corridor',
     fork: 'Forked Pressure',
@@ -1529,14 +1629,15 @@ function buildStageDirector(stageIndex, aiSummary, limitedTime, fallbackLevel = 
     const rng = createRng(seed);
     const onboardingBand = blueprint?.onboardingBand || (stageIndex <= 2 ? 'intro' : stageIndex <= 4 ? 'teach' : stageIndex <= 6 ? 'bridge' : 'full');
 
+    const lateGameWeight = Math.min(stageIndex / 12, 1.5);
     let mode = weightedPick(rng, [
-        { value: 'flow', weight: limitedTime ? 2.6 : 1.6 },
-        { value: 'fork', weight: 1.4 + aiSummary.shortcutUsage * 0.3 },
-        { value: 'tower', weight: 1.0 + Math.min(aiSummary.jumpRate, 1.2) * 0.8 },
-        { value: 'sprint', weight: limitedTime ? 2.8 : 1.0 + Math.min(aiSummary.avgSpeed / PLAYER_SPEED, 1) },
-        { value: 'switchback', weight: stageIndex > 3 ? 1.6 : 0.8 },
-        { value: 'recovery', weight: recentDeath && recentDeath.cause === 'void' ? 2.1 : 1.0 },
-        { value: 'roller', weight: stageIndex > 4 ? 1.7 : 0.7 },
+        { value: 'flow', weight: limitedTime ? 2.6 : Math.max(0.6, 1.6 - lateGameWeight * 0.5) },
+        { value: 'fork', weight: 1.4 + aiSummary.shortcutUsage * 0.3 + lateGameWeight * 0.3 },
+        { value: 'tower', weight: 1.0 + Math.min(aiSummary.jumpRate, 1.2) * 0.8 + lateGameWeight * 0.4 },
+        { value: 'sprint', weight: limitedTime ? 2.8 : 1.0 + Math.min(aiSummary.avgSpeed / PLAYER_SPEED, 1) + lateGameWeight * 0.2 },
+        { value: 'switchback', weight: stageIndex > 3 ? 1.6 + lateGameWeight * 0.3 : 0.8 },
+        { value: 'recovery', weight: recentDeath && recentDeath.cause === 'void' ? 2.1 : Math.max(0.4, 1.0 - lateGameWeight * 0.3) },
+        { value: 'roller', weight: stageIndex > 4 ? 1.7 + lateGameWeight * 0.3 : 0.7 },
     ], 'flow');
     if (onboardingBand === 'intro') mode = rng.pick(['flow', 'recovery']);
     else if (onboardingBand === 'teach') mode = rng.pick(['flow', 'recovery', 'sprint']);
@@ -1553,10 +1654,11 @@ function buildStageDirector(stageIndex, aiSummary, limitedTime, fallbackLevel = 
     else if (onboardingBand === 'teach') laneBias = rng.pick(['mid', 'low', 'high']);
     if (blueprint?.laneBias) laneBias = blueprint.laneBias;
 
+    const lateStagePush = Math.max(0, stageIndex - 10) * 0.015;
     let remixLevel = clamp(
-        0.28 + stageTier(stageIndex) * 0.11 + directorState.runSerial * 0.06 + aiSummary.confidence * 0.2 - fallbackLevel * 0.15,
+        0.28 + stageTier(stageIndex) * 0.14 + directorState.runSerial * 0.06 + aiSummary.confidence * 0.25 + lateStagePush - fallbackLevel * 0.15,
         0.25,
-        0.96
+        0.98
     );
     if (onboardingBand === 'intro') remixLevel = clamp(0.18 + directorState.runSerial * 0.04, 0.16, 0.38);
     else if (onboardingBand === 'teach') remixLevel = clamp(0.24 + directorState.runSerial * 0.05, 0.22, 0.46);
@@ -1573,10 +1675,10 @@ function buildStageDirector(stageIndex, aiSummary, limitedTime, fallbackLevel = 
         laneBias,
         onboardingBand,
         remixLevel,
-        widthVariance: lerp(0.08, 0.28, remixLevel),
-        gapVariance: lerp(10, 54, remixLevel),
-        verticalVariance: lerp(8, 62, remixLevel),
-        jitter: lerp(10, 34, remixLevel),
+        widthVariance: lerp(0.08, 0.36, remixLevel),
+        gapVariance: lerp(10, 72, remixLevel),
+        verticalVariance: lerp(8, 78, remixLevel),
+        jitter: lerp(10, 44, remixLevel),
         branchChance: onboardingBand === 'intro'
             ? 0
             : onboardingBand === 'teach'
@@ -1784,6 +1886,10 @@ const STAGE_ARCHETYPES = [
     { id: 'long-traversal', name: 'Long Traversal', difficulty: 5, tags: ['sprint', 'flow'], build: buildLongTraversal },
     { id: 'precision-tower', name: 'Precision Tower', difficulty: 6, tags: ['tower', 'switchback'], build: buildPrecisionTower },
     { id: 'mixed-gauntlet', name: 'Mixed Gauntlet', difficulty: 7, tags: ['fork', 'roller', 'tower'], build: buildMixedGauntlet },
+    { id: 'zigzag-gauntlet', name: 'Zigzag Gauntlet', difficulty: 8, tags: ['switchback', 'roller', 'sprint'], build: buildZigzagGauntlet },
+    { id: 'skyline-rush', name: 'Skyline Rush', difficulty: 8, tags: ['tower', 'sprint', 'fork'], build: buildSkylineRush },
+    { id: 'cascade-drop', name: 'Cascade Drop', difficulty: 9, tags: ['roller', 'switchback', 'tower'], build: buildCascadeDrop },
+    { id: 'narrow-spine', name: 'Narrow Spine', difficulty: 9, tags: ['tower', 'switchback', 'fork'], build: buildNarrowSpine },
 ];
 
 const ARCHETYPES_BY_ID = Object.fromEntries(STAGE_ARCHETYPES.map(archetype => [archetype.id, archetype]));
@@ -1810,7 +1916,9 @@ function computeBugBudget(stageIndex, aiConfidence, limitedTime) {
     let budget;
     if (stageIndex <= 3) budget = 1;
     else if (stageIndex <= 6) budget = 1;
-    else budget = clamp(1 + Math.floor((stageIndex - 7) / 3), 1, 7);
+    else if (stageIndex <= 10) budget = clamp(1 + Math.floor((stageIndex - 7) / 2), 1, 4);
+    else if (stageIndex <= 20) budget = clamp(3 + Math.floor((stageIndex - 10) / 2), 3, 7);
+    else budget = clamp(5 + Math.floor((stageIndex - 20) / 3), 5, 10);
     if (limitedTime) budget -= 1;
     if (aiConfidence < 0.45 && stageIndex > 8) budget -= 1;
     if (stageIndex >= DOUBLE_JUMP_UNLOCK_STAGE) budget += 1;
@@ -1840,8 +1948,9 @@ function selectArchetypeForStage(stageIndex, limitedTime, director) {
 
     const rng = createRng(director.seed ^ 0x51f15e3d);
     const tier = stageTier(stageIndex);
-    let targetDifficulty = clamp(tier + 2 + Math.floor(stageIndex / 10), 1, 7);
+    let targetDifficulty = clamp(tier + 2 + Math.floor(stageIndex / 6), 1, 9);
     if (stageIndex <= 3) targetDifficulty = stageIndex - 1;
+    else if (stageIndex > 16) targetDifficulty = clamp(targetDifficulty + 1, 5, 9);
     const easedDifficulty = Math.max(0, targetDifficulty - 1);
     const target = limitedTime ? easedDifficulty : targetDifficulty;
 
@@ -1910,7 +2019,8 @@ function decorateStageDifficulty(stageIndex, stageData, director) {
     const tier = stageTier(stageIndex);
     const effectiveTier = limitedTime ? Math.max(0, tier - 1) : tier;
     const onboardingWideBoost = director.onboardingBand === 'intro' ? 0.14 : director.onboardingBand === 'teach' ? 0.08 : director.onboardingBand === 'bridge' ? 0.04 : 0;
-    const widthScale = clamp((1 - effectiveTier * 0.03 + (director.mode === 'recovery' ? 0.05 : 0) - director.remixLevel * 0.05 + onboardingWideBoost) * (blueprint?.widthScale ?? 1), 0.76, 1.22);
+    const lateWidthPenalty = Math.max(0, stageIndex - 12) * 0.006;
+    const widthScale = clamp((1 - effectiveTier * 0.04 + (director.mode === 'recovery' ? 0.05 : 0) - director.remixLevel * 0.08 - lateWidthPenalty + onboardingWideBoost) * (blueprint?.widthScale ?? 1), 0.68, 1.22);
     const gapPush = (director.onboardingBand === 'intro'
         ? director.gapVariance * 0.28
         : director.onboardingBand === 'teach'
@@ -2795,7 +2905,7 @@ function passesStageComfortPolicy(stageData, validation) {
         return { ok: false, reason: validation.reason || 'invalid-route' };
     }
 
-    if (stageData.stageIndex > 6) {
+    if (stageData.stageIndex > 20) {
         return { ok: true, summary: summarizeCriticalPath(stageData, validation) };
     }
 
@@ -2807,7 +2917,36 @@ function passesStageComfortPolicy(stageData, validation) {
         4: { steps: 7, maxGap: 170, maxRise: 82, dashEdges: 1, shortcutSteps: 1 },
         5: { steps: 8, maxGap: 186, maxRise: 92, dashEdges: 1, shortcutSteps: 2 },
         6: { steps: 9, maxGap: 205, maxRise: 100, dashEdges: 2, shortcutSteps: 2 },
+        7: { steps: 10, maxGap: 220, maxRise: 108, dashEdges: 2, shortcutSteps: 2 },
+        8: { steps: 10, maxGap: 230, maxRise: 114, dashEdges: 2, shortcutSteps: 2 },
+        9: { steps: 11, maxGap: 240, maxRise: 120, dashEdges: 2, shortcutSteps: 3 },
+        10: { steps: 11, maxGap: 248, maxRise: 124, dashEdges: 3, shortcutSteps: 3 },
+        11: { steps: 12, maxGap: 254, maxRise: 128, dashEdges: 3, shortcutSteps: 3 },
+        12: { steps: 12, maxGap: 260, maxRise: 132, dashEdges: 3, shortcutSteps: 3 },
     }[stageData.stageIndex];
+
+    // For stages 13-20, compute scaled thresholds
+    if (!thresholds) {
+        const scale = Math.min(1.5, 1 + (stageData.stageIndex - 12) * 0.04);
+        const computedThresholds = {
+            steps: Math.floor(12 * scale),
+            maxGap: Math.floor(260 * scale),
+            maxRise: Math.floor(132 * scale),
+            dashEdges: 3 + Math.floor((stageData.stageIndex - 12) / 3),
+            shortcutSteps: 3 + Math.floor((stageData.stageIndex - 12) / 4),
+        };
+        const tooManySteps = summary.steps > computedThresholds.steps;
+        const tooWide = summary.maxGap > computedThresholds.maxGap;
+        const tooTall = summary.maxRise > computedThresholds.maxRise;
+        const tooDashy = summary.dashEdges > computedThresholds.dashEdges;
+        const tooBranchy = summary.shortcutSteps > computedThresholds.shortcutSteps;
+        const tooTightTime = stageData.isTimeTrial && validation.shortestEta > stageData.timeLimit - 3;
+
+        if (tooManySteps || tooWide || tooTall || tooDashy || tooBranchy || tooTightTime) {
+            return { ok: false, reason: 'over-tuned-mid', summary };
+        }
+        return { ok: true, summary };
+    }
 
     const tooManySteps = summary.steps > thresholds.steps;
     const tooWide = summary.maxGap > thresholds.maxGap;
@@ -3839,10 +3978,14 @@ function quitAndSave() {
 }
 
 // ============================================
-// SECTION 17: LEADERBOARD
+// SECTION 17: LEADERBOARD (Backend-Persistent)
 // ============================================
 const LB_KEY = 'hotfix_leaderboard';
 const LB_MAX = 20;
+const API_BASE = '/api/leaderboard';
+
+// In-memory cache of leaderboard data
+let leaderboardCache = [];
 
 function getDistancePercent() {
     if (levelWidth <= 0) return 0;
@@ -3854,7 +3997,8 @@ function calculateScore(stage, distPct) {
     return stage * 1000 + Math.round(distPct * 10);
 }
 
-function loadLeaderboard() {
+// ── LocalStorage fallback helpers ───────────────
+function loadLeaderboardLocal() {
     try {
         const data = localStorage.getItem(LB_KEY);
         return data ? JSON.parse(data) : [];
@@ -3863,8 +4007,56 @@ function loadLeaderboard() {
     }
 }
 
-function saveScore(name, stage, distPct, score) {
-    const leaderboard = loadLeaderboard();
+function saveLeaderboardLocal(leaderboard) {
+    try {
+        localStorage.setItem(LB_KEY, JSON.stringify(leaderboard));
+    } catch {
+        // Ignore storage quota failures.
+    }
+}
+
+// ── API helpers ─────────────────────────────────
+async function fetchLeaderboardFromServer() {
+    try {
+        const res = await fetch(API_BASE);
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const data = await res.json();
+        if (data.success && Array.isArray(data.leaderboard)) {
+            leaderboardCache = data.leaderboard;
+            saveLeaderboardLocal(leaderboardCache);
+            return leaderboardCache;
+        }
+    } catch (err) {
+        console.warn('[LEADERBOARD] Server unavailable, using local fallback:', err.message);
+    }
+    leaderboardCache = loadLeaderboardLocal();
+    return leaderboardCache;
+}
+
+async function saveScoreToServer(name, stage, distPct, score) {
+    try {
+        const res = await fetch(API_BASE, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                name: name || 'anonymous',
+                stage,
+                dist: distPct,
+                score,
+            }),
+        });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const data = await res.json();
+        if (data.success && Array.isArray(data.leaderboard)) {
+            leaderboardCache = data.leaderboard;
+            saveLeaderboardLocal(leaderboardCache);
+            return;
+        }
+    } catch (err) {
+        console.warn('[LEADERBOARD] Server save failed, saving locally:', err.message);
+    }
+    // Fallback: save locally
+    const leaderboard = loadLeaderboardLocal();
     leaderboard.push({
         name: name || 'anonymous',
         stage,
@@ -3874,16 +4066,33 @@ function saveScore(name, stage, distPct, score) {
     });
     leaderboard.sort((a, b) => b.score - a.score);
     while (leaderboard.length > LB_MAX) leaderboard.pop();
+    saveLeaderboardLocal(leaderboard);
+    leaderboardCache = leaderboard;
+}
+
+async function clearLeaderboardOnServer() {
     try {
-        localStorage.setItem(LB_KEY, JSON.stringify(leaderboard));
-    } catch {
-        // Ignore storage quota failures.
+        const res = await fetch(API_BASE, { method: 'DELETE' });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    } catch (err) {
+        console.warn('[LEADERBOARD] Server clear failed:', err.message);
     }
+    localStorage.removeItem(LB_KEY);
+    leaderboardCache = [];
+}
+
+// ── Public API (used by the rest of the game) ───
+function loadLeaderboard() {
+    return leaderboardCache.length ? leaderboardCache : loadLeaderboardLocal();
+}
+
+function saveScore(name, stage, distPct, score) {
+    // Fire and forget — updates cache + localStorage async
+    saveScoreToServer(name, stage, distPct, score);
 }
 
 function clearLeaderboard() {
-    localStorage.removeItem(LB_KEY);
-    renderLeaderboard();
+    clearLeaderboardOnServer().then(() => renderLeaderboard());
 }
 
 function renderLeaderboard() {
@@ -3923,8 +4132,11 @@ function escapeHtml(str) {
 }
 
 function showLeaderboard() {
-    renderLeaderboard();
-    leaderboardOverlay.classList.remove('hidden');
+    // Fetch fresh data from server, then render
+    fetchLeaderboardFromServer().then(() => {
+        renderLeaderboard();
+        leaderboardOverlay.classList.remove('hidden');
+    });
 }
 
 function hideLeaderboard() {
