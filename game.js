@@ -24,6 +24,11 @@ const MAX_JUMP_V = 118;
 
 const CONSOLE_WIDTH = 320;
 const STAGE_ALERT_DURATION = 1800;
+const LOADING_STEP_MS = 520;
+const LOADING_DEPLOY_DELAY_MS = 700;
+const REACH_SIM_FRAMES = 72;
+const SAFE_LANDING_MARGIN = 8;
+const REACH_DASH_STARTS = [4, 6, 8, 10, 12, 14];
 const FLOOR_HEIGHT = 30;
 const SAFE_FALLBACK_ARCHETYPE_ID = 'recovery-floor';
 const ENCOURAGEMENT_LINES = [
@@ -202,11 +207,21 @@ function createAIProfile() {
 }
 
 let aiProfile = createAIProfile();
+const directorState = {
+    runSerial: 0,
+    buildSerial: 0,
+    recentArchetypes: [],
+    recentModes: [],
+};
 
 function resetAIProfile() {
     aiProfile = createAIProfile();
     previousPaths = [];
     lastArchetypeId = null;
+}
+
+function beginCampaignRun() {
+    directorState.runSerial++;
 }
 
 // ============================================
@@ -263,6 +278,66 @@ function makeSurfaceSlot(platform, align, lane, counterTags, threat, typeOptions
         typeOptions,
         minStage,
     };
+}
+
+function hashString(value) {
+    let hash = 2166136261;
+    for (let i = 0; i < value.length; i++) {
+        hash ^= value.charCodeAt(i);
+        hash = Math.imul(hash, 16777619);
+    }
+    return hash >>> 0;
+}
+
+function createRng(seed) {
+    let state = seed >>> 0;
+
+    const next = () => {
+        state += 0x6D2B79F5;
+        let t = state;
+        t = Math.imul(t ^ (t >>> 15), t | 1);
+        t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+        return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+    };
+
+    return {
+        next,
+        range(min, max) {
+            return min + next() * (max - min);
+        },
+        int(min, max) {
+            return Math.floor(this.range(min, max + 1));
+        },
+        chance(probability) {
+            return next() < probability;
+        },
+        pick(list) {
+            return list[this.int(0, list.length - 1)];
+        },
+    };
+}
+
+function weightedPick(rng, entries, fallback = null) {
+    const total = entries.reduce((sum, entry) => sum + Math.max(0, entry.weight), 0);
+    if (total <= 0) {
+        return fallback ?? entries[0].value;
+    }
+
+    let roll = rng.range(0, total);
+    for (const entry of entries) {
+        const weight = Math.max(0, entry.weight);
+        if (roll <= weight) return entry.value;
+        roll -= weight;
+    }
+
+    return entries[entries.length - 1].value;
+}
+
+function registerDirectorMemory(stageData) {
+    directorState.recentArchetypes.push(stageData.archetypeId);
+    directorState.recentModes.push(stageData.director.mode);
+    if (directorState.recentArchetypes.length > 10) directorState.recentArchetypes.shift();
+    if (directorState.recentModes.length > 10) directorState.recentModes.shift();
 }
 
 function finishStage(archetype, platformsList, spawnPlatform, goalPlatform, bugSlots) {
@@ -700,33 +775,297 @@ function buildMixedGauntlet(archetype) {
     return finishStage(archetype, [spawn, low1, high1, low2, high2, floor, tower, tower2, finalRun, goalPlat], spawn, goalPlat, bugSlots);
 }
 
+const DIRECTOR_LABELS = {
+    flow: 'Flow Corridor',
+    fork: 'Forked Pressure',
+    tower: 'Vertical Puzzle',
+    sprint: 'Redline Sprint',
+    switchback: 'Switchback Lines',
+    recovery: 'Recovery Mesh',
+    roller: 'Waveform Drift',
+};
+
+function buildStageDirector(stageIndex, aiSummary, limitedTime, fallbackLevel = 0) {
+    directorState.buildSerial++;
+    const recentDeath = aiProfile.recentDeaths[aiProfile.recentDeaths.length - 1];
+    const seed = hashString([
+        directorState.runSerial,
+        directorState.buildSerial,
+        stageIndex,
+        limitedTime ? 'tt' : 'normal',
+        fallbackLevel,
+        aiSummary.preferredLane,
+        Math.round(aiSummary.jumpRate * 100),
+        Math.round(aiSummary.dashRate * 100),
+        Math.round(aiSummary.avgSpeed * 100),
+        aiSummary.clearedStages,
+        recentDeath ? `${recentDeath.stageIndex}:${recentDeath.cause}` : 'clean',
+    ].join('|'));
+    const rng = createRng(seed);
+    const onboardingBand = stageIndex <= 2 ? 'intro' : stageIndex <= 4 ? 'teach' : stageIndex <= 6 ? 'bridge' : 'full';
+
+    let mode = weightedPick(rng, [
+        { value: 'flow', weight: limitedTime ? 2.6 : 1.6 },
+        { value: 'fork', weight: 1.4 + aiSummary.shortcutUsage * 0.3 },
+        { value: 'tower', weight: 1.0 + Math.min(aiSummary.jumpRate, 1.2) * 0.8 },
+        { value: 'sprint', weight: limitedTime ? 2.8 : 1.0 + Math.min(aiSummary.avgSpeed / PLAYER_SPEED, 1) },
+        { value: 'switchback', weight: stageIndex > 3 ? 1.6 : 0.8 },
+        { value: 'recovery', weight: recentDeath && recentDeath.cause === 'void' ? 2.1 : 1.0 },
+        { value: 'roller', weight: stageIndex > 4 ? 1.7 : 0.7 },
+    ], 'flow');
+    if (onboardingBand === 'intro') mode = rng.pick(['flow', 'recovery']);
+    else if (onboardingBand === 'teach') mode = rng.pick(['flow', 'recovery', 'sprint']);
+    else if (onboardingBand === 'bridge' && !limitedTime) mode = rng.pick(['flow', 'sprint', 'switchback', 'fork']);
+
+    let laneBias = weightedPick(rng, [
+        { value: aiSummary.preferredLane, weight: 2.3 },
+        { value: 'mid', weight: 1.4 },
+        { value: 'high', weight: aiSummary.preferredLane === 'high' ? 1.8 : 1.0 },
+        { value: 'low', weight: aiSummary.preferredLane === 'low' ? 1.8 : 1.0 },
+    ], 'mid');
+    if (onboardingBand === 'intro') laneBias = rng.pick(['mid', 'low']);
+    else if (onboardingBand === 'teach') laneBias = rng.pick(['mid', 'low', 'high']);
+
+    let remixLevel = clamp(
+        0.28 + stageTier(stageIndex) * 0.11 + directorState.runSerial * 0.06 + aiSummary.confidence * 0.2 - fallbackLevel * 0.15,
+        0.25,
+        0.96
+    );
+    if (onboardingBand === 'intro') remixLevel = clamp(0.18 + directorState.runSerial * 0.04, 0.16, 0.38);
+    else if (onboardingBand === 'teach') remixLevel = clamp(0.24 + directorState.runSerial * 0.05, 0.22, 0.46);
+    else if (onboardingBand === 'bridge') remixLevel = clamp(0.34 + directorState.runSerial * 0.05 + aiSummary.confidence * 0.1, 0.32, 0.58);
+
+    return {
+        seed,
+        variantCode: seed.toString(16).slice(-4).toUpperCase(),
+        mode,
+        label: DIRECTOR_LABELS[mode],
+        laneBias,
+        onboardingBand,
+        remixLevel,
+        widthVariance: lerp(0.08, 0.28, remixLevel),
+        gapVariance: lerp(10, 54, remixLevel),
+        verticalVariance: lerp(8, 62, remixLevel),
+        jitter: lerp(10, 34, remixLevel),
+        branchChance: onboardingBand === 'intro'
+            ? 0
+            : onboardingBand === 'teach'
+                ? clamp(0.06 + remixLevel * 0.14, 0.06, 0.16)
+                : clamp(0.14 + remixLevel * 0.34 + (mode === 'fork' ? 0.2 : 0), 0.12, 0.72),
+        connectorChance: onboardingBand === 'intro'
+            ? 0.12
+            : onboardingBand === 'teach'
+                ? clamp(0.12 + remixLevel * 0.14, 0.12, 0.26)
+                : clamp(0.16 + remixLevel * 0.22 + (mode === 'recovery' ? 0.16 : 0), 0.16, 0.58),
+        supportChance: onboardingBand === 'intro'
+            ? 0.42
+            : onboardingBand === 'teach'
+                ? 0.34
+                : clamp(0.14 + remixLevel * 0.25 + (limitedTime ? 0.12 : 0), 0.14, 0.62),
+        routeSplitBias: mode === 'fork' ? 1.4 : mode === 'recovery' ? 0.7 : 1,
+    };
+}
+
+function createSafeDirector(stageIndex) {
+    const seed = hashString(`safe|${directorState.runSerial}|${stageIndex}|${directorState.buildSerial}`);
+    return {
+        seed,
+        variantCode: `S${seed.toString(16).slice(-3).toUpperCase()}`,
+        mode: 'flow',
+        label: stageIndex <= 3 ? 'Gentle Onboarding' : 'Safe Route',
+        laneBias: 'mid',
+        onboardingBand: stageIndex <= 2 ? 'intro' : stageIndex <= 6 ? 'teach' : 'full',
+        remixLevel: stageIndex <= 2 ? 0.12 : stageIndex <= 6 ? 0.18 : 0.24,
+        widthVariance: 0.03,
+        gapVariance: stageIndex <= 2 ? 4 : 8,
+        verticalVariance: stageIndex <= 2 ? 2 : 6,
+        jitter: 4,
+        branchChance: 0,
+        connectorChance: 0.08,
+        supportChance: 0.54,
+        routeSplitBias: 0.4,
+    };
+}
+
+function laneOffsetForBias(lane, director) {
+    const laneBase = {
+        high: -28,
+        mid: 0,
+        low: 18,
+    };
+    let offset = laneBase[lane] || 0;
+    if (lane === director.laneBias) offset += director.mode === 'tower' ? -12 : director.mode === 'sprint' ? 8 : -4;
+    if (director.mode === 'roller') {
+        if (lane === 'high') offset -= 10;
+        if (lane === 'low') offset += 12;
+    }
+    if (director.mode === 'recovery' && lane === 'low') offset += 8;
+    return offset;
+}
+
+function stagePlatformConflict(candidate, stagePlatforms, paddingX = 20, paddingY = 24) {
+    return stagePlatforms.some(platform =>
+        candidate.x < platform.x + platform.w + paddingX &&
+        candidate.x + candidate.w > platform.x - paddingX &&
+        candidate.y < platform.y + platform.h + paddingY &&
+        candidate.y + candidate.h > platform.y - paddingY
+    );
+}
+
+function refreshStageGeometry(stageData) {
+    stageData.platforms.sort((a, b) => (a.x - b.x) || (a.y - b.y));
+    stageData.spawn = makeSpawnFromPlatform(stageData.spawnPlatform);
+    stageData.goal = makeGoalFromPlatform(stageData.goalPlatform);
+    stageData.levelWidth = Math.max(canvas.width, Math.max(...stageData.platforms.map(platform => platform.x + platform.w)) + 160);
+}
+
+function injectSupportPlatform(stageData, from, to, director, rng) {
+    const gap = to.x - (from.x + from.w);
+    if (gap < 120) return;
+
+    const x = from.x + from.w + gap * rng.range(0.28, 0.48);
+    const y = clamp(Math.max(from.y, to.y) + rng.range(24, 58), 112, canvas.height - 62);
+    const w = rng.range(82, 126);
+    const platform = createPlatform(x, y, w, 'floor', 'low', FLOOR_HEIGHT);
+    if (stagePlatformConflict(platform, stageData.platforms, 10, 12)) return;
+    stageData.platforms.push(platform);
+}
+
+function injectBranchPlatform(stageData, from, to, director, rng) {
+    const gap = to.x - (from.x + from.w);
+    if (gap < 110) return;
+
+    const lane = director.mode === 'recovery'
+        ? 'low'
+        : director.laneBias === 'high'
+            ? (rng.chance(0.35) ? 'mid' : 'low')
+            : 'high';
+    const x = from.x + from.w + gap * rng.range(0.24, 0.44);
+    const baseY = lerp(from.y, to.y, rng.range(0.25, 0.55));
+    const y = clamp(baseY + laneOffsetForBias(lane, director) + rng.range(-18, 18), 82, canvas.height - 90);
+    const w = rng.range(86, 132);
+    const role = lane === 'low' ? 'main' : 'shortcut';
+    const platform = createPlatform(x, y, w, role, lane);
+    if (stagePlatformConflict(platform, stageData.platforms, 12, 16)) return;
+
+    stageData.platforms.push(platform);
+    stageData.bugSlots.push(
+        makeSurfaceSlot(
+            platform,
+            rng.range(0.34, 0.7),
+            lane,
+            lane === 'high' ? ['shortcut', 'jump'] : ['speed', 'hesitation'],
+            1.2 + director.remixLevel * 0.6,
+            lane === 'high' ? ['laser', 'spike'] : ['bug', 'spike'],
+            Math.max(3, Math.floor(stageData.stageIndex / 2))
+        )
+    );
+}
+
+function injectConnectorPlatform(stageData, from, to, director, rng) {
+    const gap = to.x - (from.x + from.w);
+    if (gap < 180) return;
+
+    const x = from.x + from.w + gap * rng.range(0.42, 0.58);
+    const y = clamp(lerp(from.y, to.y, 0.5) + rng.range(-10, 14), 84, canvas.height - 96);
+    const w = rng.range(78, 112);
+    const lane = ratioToLane(y / canvas.height);
+    const platform = createPlatform(x, y, w, 'main', lane);
+    if (stagePlatformConflict(platform, stageData.platforms, 12, 14)) return;
+
+    stageData.platforms.push(platform);
+    if (director.mode === 'switchback' || director.mode === 'tower') {
+        stageData.bugSlots.push(
+            makeSurfaceSlot(platform, rng.range(0.3, 0.7), lane, ['hesitation', 'jump'], 1.05 + director.remixLevel * 0.5, ['bug', 'spike'], 4)
+        );
+    }
+}
+
+function remixStageWithDirector(stageData, director) {
+    const rng = createRng(director.seed ^ 0x9e3779b9);
+    const routePlatforms = stageData.platforms
+        .filter(platform => platform.role !== 'floor')
+        .sort((a, b) => a.x - b.x);
+
+    const cumulativeShift = { value: 0 };
+    for (let i = 1; i < routePlatforms.length; i++) {
+        const platform = routePlatforms[i];
+        const progress = i / Math.max(1, routePlatforms.length - 1);
+        const widthFactor = 1 + rng.range(-director.widthVariance, director.widthVariance * 0.8);
+        const wave = director.mode === 'roller'
+            ? Math.sin(progress * Math.PI * (2 + director.remixLevel * 2)) * director.verticalVariance * 0.45
+            : director.mode === 'switchback'
+                ? (i % 2 === 0 ? 1 : -1) * director.verticalVariance * 0.3
+                : 0;
+        const lateral = director.gapVariance * progress * rng.range(0.35, 0.9);
+        const jitterX = rng.range(-director.jitter, director.jitter);
+        const jitterY = rng.range(-director.jitter * 0.45, director.jitter * 0.45);
+
+        cumulativeShift.value += lateral;
+        if (platform.role !== 'floor') {
+            platform.x += Math.round(cumulativeShift.value + jitterX * 0.4);
+        }
+
+        if (platform.role !== 'spawn' && platform.role !== 'goal' && platform.role !== 'floor') {
+            const minWidth = platform.role === 'shortcut' ? 72 : 86;
+            platform.w = Math.max(minWidth, Math.round(platform.w * widthFactor));
+        }
+
+        if (platform.role !== 'floor') {
+            const laneBiasOffset = laneOffsetForBias(platform.routeLane, director);
+            const vertical = laneBiasOffset + wave + jitterY;
+            platform.y = clamp(platform.y + Math.round(vertical), 76, canvas.height - 78);
+        }
+    }
+
+    const mainPlatforms = routePlatforms.filter(platform => platform.role !== 'shortcut');
+    for (let i = 0; i < mainPlatforms.length - 1; i++) {
+        const from = mainPlatforms[i];
+        const to = mainPlatforms[i + 1];
+        if (rng.chance(director.supportChance * (director.onboardingBand === 'intro' ? 0.7 : 0.45))) {
+            injectSupportPlatform(stageData, from, to, director, rng);
+        }
+        if (stageData.stageIndex >= 4 && rng.chance(director.branchChance * director.routeSplitBias * (director.onboardingBand === 'teach' ? 0.18 : 0.5))) {
+            injectBranchPlatform(stageData, from, to, director, rng);
+        }
+        if (stageData.stageIndex >= 3 && rng.chance(director.connectorChance * (director.onboardingBand === 'intro' ? 0.22 : 0.42))) {
+            injectConnectorPlatform(stageData, from, to, director, rng);
+        }
+    }
+
+    refreshStageGeometry(stageData);
+}
+
 const STAGE_ARCHETYPES = [
-    { id: 'intro-flats', name: 'Intro Flats', difficulty: 0, build: buildIntroFlats },
-    { id: 'step-up', name: 'Step Up', difficulty: 1, build: buildStepUp },
-    { id: 'dash-bridge', name: 'Dash Bridge', difficulty: 2, build: buildDashBridge },
-    { id: 'split-route', name: 'Split Route', difficulty: 3, build: buildSplitRoute },
-    { id: 'low-tunnel', name: 'Low Tunnel', difficulty: 3, build: buildLowTunnel },
-    { id: 'recovery-floor', name: 'Recovery Floor', difficulty: 1, build: buildRecoveryFloor },
-    { id: 'vertical-ladder', name: 'Vertical Ladder', difficulty: 5, build: buildVerticalLadder },
-    { id: 'stagger-jump', name: 'Stagger Jump', difficulty: 4, build: buildStaggerJump },
-    { id: 'alternating-heights', name: 'Alternating Heights', difficulty: 4, build: buildAlternatingHeights },
-    { id: 'long-traversal', name: 'Long Traversal', difficulty: 5, build: buildLongTraversal },
-    { id: 'precision-tower', name: 'Precision Tower', difficulty: 6, build: buildPrecisionTower },
-    { id: 'mixed-gauntlet', name: 'Mixed Gauntlet', difficulty: 7, build: buildMixedGauntlet },
+    { id: 'intro-flats', name: 'Intro Flats', difficulty: 0, tags: ['flow', 'recovery', 'sprint'], build: buildIntroFlats },
+    { id: 'step-up', name: 'Step Up', difficulty: 1, tags: ['tower', 'flow'], build: buildStepUp },
+    { id: 'dash-bridge', name: 'Dash Bridge', difficulty: 2, tags: ['sprint', 'flow'], build: buildDashBridge },
+    { id: 'split-route', name: 'Split Route', difficulty: 3, tags: ['fork', 'switchback'], build: buildSplitRoute },
+    { id: 'low-tunnel', name: 'Low Tunnel', difficulty: 3, tags: ['recovery', 'switchback'], build: buildLowTunnel },
+    { id: 'recovery-floor', name: 'Recovery Floor', difficulty: 1, tags: ['recovery', 'flow'], build: buildRecoveryFloor },
+    { id: 'vertical-ladder', name: 'Vertical Ladder', difficulty: 5, tags: ['tower', 'fork'], build: buildVerticalLadder },
+    { id: 'stagger-jump', name: 'Stagger Jump', difficulty: 4, tags: ['switchback', 'tower'], build: buildStaggerJump },
+    { id: 'alternating-heights', name: 'Alternating Heights', difficulty: 4, tags: ['roller', 'switchback'], build: buildAlternatingHeights },
+    { id: 'long-traversal', name: 'Long Traversal', difficulty: 5, tags: ['sprint', 'flow'], build: buildLongTraversal },
+    { id: 'precision-tower', name: 'Precision Tower', difficulty: 6, tags: ['tower', 'switchback'], build: buildPrecisionTower },
+    { id: 'mixed-gauntlet', name: 'Mixed Gauntlet', difficulty: 7, tags: ['fork', 'roller', 'tower'], build: buildMixedGauntlet },
 ];
 
 const ARCHETYPES_BY_ID = Object.fromEntries(STAGE_ARCHETYPES.map(archetype => [archetype.id, archetype]));
 
 function isLimitedTimeStage(stageIndex) {
-    return stageIndex >= 4 && stageIndex % 4 === 0;
+    return stageIndex >= 8 && stageIndex % 4 === 0;
 }
 
 function computeTimeLimit(stageIndex) {
-    return Math.max(16, 30 - Math.floor(stageIndex / 4));
+    const trialIndex = Math.floor((stageIndex - 8) / 4);
+    return Math.max(20, 32 - Math.max(0, trialIndex) * 2);
 }
 
 function computeBugBudget(stageIndex, aiConfidence, limitedTime) {
-    let budget = clamp(Math.floor((stageIndex - 1) / 3), 0, 6);
+    let budget = clamp(Math.floor((stageIndex - 5) / 3), 0, 6);
+    if (stageIndex <= 4) budget = 0;
+    else if (stageIndex <= 6) budget = Math.min(budget, 1);
     if (limitedTime) budget -= 1;
     if (aiConfidence < 0.45) budget -= 1;
     return Math.max(0, budget);
@@ -736,31 +1075,58 @@ function stageTier(stageIndex) {
     return Math.floor((stageIndex - 1) / 5);
 }
 
-function selectArchetypeForStage(stageIndex, limitedTime) {
-    if (stageIndex === 1) return ARCHETYPES_BY_ID['intro-flats'];
-    if (stageIndex === 2) return ARCHETYPES_BY_ID['step-up'];
-    if (stageIndex === 3) return ARCHETYPES_BY_ID['dash-bridge'];
+function archetypeRecentPenalty(archetypeId) {
+    const recent = directorState.recentArchetypes.slice(-4);
+    const index = recent.lastIndexOf(archetypeId);
+    if (index === -1) return 0;
+    return 1.4 - index * 0.25;
+}
 
+function selectArchetypeForStage(stageIndex, limitedTime, director) {
+    const rng = createRng(director.seed ^ 0x51f15e3d);
     const tier = stageTier(stageIndex);
-    const targetDifficulty = clamp(tier + 2 + Math.floor(stageIndex / 10), 1, 7);
+    let targetDifficulty = clamp(tier + 2 + Math.floor(stageIndex / 10), 1, 7);
+    if (stageIndex <= 3) targetDifficulty = stageIndex - 1;
     const easedDifficulty = Math.max(0, targetDifficulty - 1);
     const target = limitedTime ? easedDifficulty : targetDifficulty;
 
+    const onboardingPools = {
+        1: ['intro-flats', 'recovery-floor'],
+        2: ['intro-flats', 'recovery-floor', 'step-up'],
+        3: ['step-up', 'dash-bridge', 'recovery-floor'],
+        4: ['dash-bridge', 'split-route', 'recovery-floor', 'low-tunnel'],
+        5: ['step-up', 'split-route', 'stagger-jump', 'alternating-heights'],
+        6: ['split-route', 'low-tunnel', 'stagger-jump', 'alternating-heights'],
+    };
+    const allowedIds = onboardingPools[stageIndex];
+
     const candidates = STAGE_ARCHETYPES.filter(archetype => {
+        if (allowedIds) {
+            return allowedIds.includes(archetype.id);
+        }
         const minDifficulty = limitedTime ? Math.max(0, target - 2) : Math.max(0, target - 1);
         const maxDifficulty = limitedTime ? target + 1 : target + 2;
         return archetype.difficulty >= minDifficulty && archetype.difficulty <= maxDifficulty;
     });
 
     const pool = candidates.length ? candidates : STAGE_ARCHETYPES;
-    let index = (stageIndex + tier * 3) % pool.length;
-    if (pool[index].id === lastArchetypeId && pool.length > 1) {
-        index = (index + 1) % pool.length;
-    }
-    return pool[index];
+    const weightedPool = pool.map(archetype => {
+        let weight = 1.5 - Math.abs(archetype.difficulty - target) * 0.24;
+        if (archetype.tags.includes(director.mode)) weight += 1.2;
+        if (archetype.tags.includes('tower') && director.laneBias === 'high') weight += 0.4;
+        if (archetype.tags.includes('recovery') && director.mode === 'recovery') weight += 0.7;
+        if (archetype.tags.includes('sprint') && director.mode === 'sprint') weight += 0.7;
+        if (archetype.id === lastArchetypeId) weight -= 0.9;
+        weight -= archetypeRecentPenalty(archetype.id);
+        weight += rng.range(0.05, 0.4);
+        return { value: archetype, weight: Math.max(0.08, weight) };
+    });
+
+    return weightedPick(rng, weightedPool, pool[0]);
 }
 
-function pickFallbackArchetype(stageIndex, primary, limitedTime) {
+function pickFallbackArchetype(stageIndex, primary, limitedTime, director) {
+    const rng = createRng(director.seed ^ 0x85ebca6b);
     const targetDifficulty = Math.max(0, primary.difficulty - 1);
     const candidates = STAGE_ARCHETYPES.filter(archetype => {
         if (archetype.id === primary.id) return false;
@@ -772,43 +1138,60 @@ function pickFallbackArchetype(stageIndex, primary, limitedTime) {
         return ARCHETYPES_BY_ID[SAFE_FALLBACK_ARCHETYPE_ID];
     }
 
-    return candidates[(stageIndex + 1) % candidates.length];
+    const weightedPool = candidates.map(archetype => ({
+        value: archetype,
+        weight: Math.max(0.15, 1.6 - Math.abs(archetype.difficulty - targetDifficulty) * 0.35 + (archetype.tags.includes(director.mode) ? 0.5 : 0)),
+    }));
+    return weightedPick(rng, weightedPool, candidates[0]);
 }
 
-function decorateStageDifficulty(stageIndex, stageData) {
+function decorateStageDifficulty(stageIndex, stageData, director) {
     const limitedTime = isLimitedTimeStage(stageIndex);
     const tier = stageTier(stageIndex);
     const effectiveTier = limitedTime ? Math.max(0, tier - 1) : tier;
-    const widthScale = clamp(1 - effectiveTier * 0.035, 0.78, 1);
-    const gapPush = effectiveTier * 18;
-    const verticalPush = effectiveTier * 5;
+    const onboardingWideBoost = director.onboardingBand === 'intro' ? 0.14 : director.onboardingBand === 'teach' ? 0.08 : director.onboardingBand === 'bridge' ? 0.04 : 0;
+    const widthScale = clamp(1 - effectiveTier * 0.03 + (director.mode === 'recovery' ? 0.05 : 0) - director.remixLevel * 0.05 + onboardingWideBoost, 0.78, 1.16);
+    const gapPush = director.onboardingBand === 'intro'
+        ? director.gapVariance * 0.28
+        : director.onboardingBand === 'teach'
+            ? effectiveTier * 10 + director.gapVariance * 0.4
+            : effectiveTier * 18 + director.gapVariance * (limitedTime ? 0.55 : 1);
+    const verticalPush = director.onboardingBand === 'intro'
+        ? director.verticalVariance * 0.04
+        : director.onboardingBand === 'teach'
+            ? effectiveTier * 2 + director.verticalVariance * 0.08
+            : effectiveTier * 5 + director.verticalVariance * 0.18;
+    const rng = createRng(director.seed ^ 0x27d4eb2f);
 
     stageData.tier = tier;
     stageData.isTimeTrial = limitedTime;
     stageData.timeLimit = limitedTime ? computeTimeLimit(stageIndex) : 0;
+    stageData.director = director;
+    stageData.variantName = `${director.label} ${director.variantCode}`;
 
     for (let i = 1; i < stageData.platforms.length; i++) {
         const platform = stageData.platforms[i];
         const progress = i / Math.max(1, stageData.platforms.length - 1);
+        const jitterScale = director.onboardingBand === 'intro' ? 0.32 : director.onboardingBand === 'teach' ? 0.55 : 1;
+        const jitter = rng.range(-director.jitter * jitterScale, director.jitter * jitterScale);
 
         if (platform.role !== 'floor') {
-            platform.x += Math.round(progress * i * gapPush * 0.35);
+            platform.x += Math.round(progress * i * gapPush * 0.3 + jitter * 0.25);
         }
 
         if (platform.role !== 'spawn' && platform.role !== 'goal' && platform.role !== 'floor') {
-            platform.w = Math.max(platform.role === 'shortcut' ? 70 : 82, Math.round(platform.w * widthScale));
+            const widthJitter = 1 + rng.range(-director.widthVariance, director.widthVariance * 0.75);
+            platform.w = Math.max(platform.role === 'shortcut' ? 70 : 82, Math.round(platform.w * widthScale * widthJitter));
         }
 
-        if (platform.role !== 'floor' && platform.routeLane !== 'low') {
-            platform.y = Math.max(76, platform.y - Math.round(progress * verticalPush));
+        if (platform.role !== 'floor') {
+            const bias = laneOffsetForBias(platform.routeLane, director);
+            platform.y = clamp(platform.y - Math.round(progress * verticalPush) + Math.round(bias + jitter * 0.3), 76, canvas.height - 84);
         }
     }
 
-    stageData.platforms.sort((a, b) => (a.x - b.x) || (a.y - b.y));
-    stageData.spawn = makeSpawnFromPlatform(stageData.spawnPlatform);
-    stageData.goal = makeGoalFromPlatform(stageData.goalPlatform);
-    stageData.levelWidth = Math.max(canvas.width, Math.max(...stageData.platforms.map(platform => platform.x + platform.w)) + 160);
-
+    remixStageWithDirector(stageData, director);
+    refreshStageGeometry(stageData);
     return stageData;
 }
 
@@ -930,11 +1313,13 @@ function planStageObstacles(stageData, aiSummary) {
 }
 
 function createStageCandidate(stageIndex, archetype, aiSummary, options = {}) {
+    const director = options.director ?? buildStageDirector(stageIndex, aiSummary, isLimitedTimeStage(stageIndex), options.fallbackLevel || 0);
     const baseStage = archetype.build(archetype);
     const stageData = decorateStageDifficulty(stageIndex, {
         ...baseStage,
         stageIndex,
-    });
+    }, director);
+    const topology = pruneDisconnectedPlatforms(stageData);
 
     const obstaclePlan = options.disableBugs
         ? { bugBudget: 0, plannedObstacles: [] }
@@ -945,9 +1330,11 @@ function createStageCandidate(stageIndex, archetype, aiSummary, options = {}) {
     stageData.plannedObstacles = obstaclePlan.plannedObstacles;
     stageData.meta = {
         removedBugs: 0,
+        removedPlatforms: topology.removedPlatforms,
         fallbackLevel: 0,
         validationAttempts: 0,
     };
+    stageData.topology = topology;
 
     return stageData;
 }
@@ -1002,29 +1389,266 @@ function edgeBlockedByLaser(from, to, obstacles) {
     });
 }
 
-function getReachMetrics(from, to) {
+function estimateTakeoffSpeed(platform) {
+    const runway = Math.max(0, platform.w - player.width - SAFE_LANDING_MARGIN * 2);
+    let vx = 0;
+    let distance = 0;
+    let frames = 0;
+
+    while (frames < 24 && distance < runway) {
+        vx = Math.min(PLAYER_SPEED, vx + PLAYER_ACCEL);
+        distance += vx;
+        frames++;
+    }
+
+    return clamp(vx, Math.min(PLAYER_SPEED, 2.4), PLAYER_SPEED);
+}
+
+function platformGap(from, to) {
     const fromRight = from.x + from.w;
     const toRight = to.x + to.w;
+    if (to.x > fromRight) return to.x - fromRight;
+    if (from.x > toRight) return from.x - toRight;
+    return 0;
+}
 
-    let horizontalGap = 0;
-    if (to.x > fromRight) horizontalGap = to.x - fromRight;
-    else if (from.x > toRight) horizontalGap = from.x - toRight;
+function simulateTraversePattern(from, to, direction, dashStartFrame = null) {
+    const startX = direction > 0
+        ? from.x + from.w - player.width - 1
+        : from.x + 1;
+    const landingInset = Math.min(SAFE_LANDING_MARGIN, Math.max(3, Math.floor((to.w - player.width) / 4)));
+    const safeCenterMin = to.x + landingInset + player.width / 2;
+    const safeCenterMax = to.x + to.w - landingInset - player.width / 2;
 
-    const verticalDiff = from.y - to.y;
-    if (verticalDiff > MAX_JUMP_V) return null;
+    if (safeCenterMax < safeCenterMin) {
+        return null;
+    }
 
-    const jumpReach = verticalDiff > 24 ? MAX_JUMP_H * 0.92 : MAX_JUMP_H;
-    const dashRequired = horizontalGap > jumpReach;
-    const maxReach = dashRequired ? MAX_DASH_H : jumpReach;
+    let x = startX;
+    let y = from.y - player.height;
+    let vx = estimateTakeoffSpeed(from) * direction;
+    let vy = JUMP_FORCE;
+    let dashFrames = 0;
+    let usedDash = false;
 
-    if (horizontalGap > maxReach) return null;
+    for (let frame = 1; frame <= REACH_SIM_FRAMES; frame++) {
+        if (dashStartFrame !== null && !usedDash && frame >= dashStartFrame) {
+            dashFrames = DASH_DURATION;
+            usedDash = true;
+            vy = 0;
+        }
 
-    const centerDistance = Math.abs((to.x + to.w / 2) - (from.x + from.w / 2));
-    const eta = centerDistance / (PLAYER_SPEED * 60) + (verticalDiff >= 10 ? 0.45 : 0.18) + (dashRequired ? 0.25 : 0);
+        const prevX = x;
+        const prevY = y;
+
+        if (dashFrames > 0) {
+            vx = direction * DASH_SPEED;
+            vy = 0;
+            dashFrames--;
+        } else {
+            vx = clamp(vx + direction * PLAYER_ACCEL, -PLAYER_SPEED, PLAYER_SPEED);
+            vy = Math.min(vy + GRAVITY, MAX_FALL_SPEED);
+        }
+
+        x += vx;
+        y += vy;
+
+        const prevCenter = prevX + player.width / 2;
+        const nextCenter = x + player.width / 2;
+        const minCenter = Math.min(prevCenter, nextCenter);
+        const maxCenter = Math.max(prevCenter, nextCenter);
+        const prevBottom = prevY + player.height;
+        const nextBottom = y + player.height;
+        const prevTop = prevY;
+        const nextTop = y;
+        const overlapsTargetX = maxCenter >= to.x + 2 && minCenter <= to.x + to.w - 2;
+
+        if (vy < 0 && overlapsTargetX && prevTop >= to.y + to.h && nextTop <= to.y + to.h) {
+            return null;
+        }
+
+        const crossesTop = prevBottom <= to.y && nextBottom >= to.y;
+        const crossesSafeX = maxCenter >= safeCenterMin && minCenter <= safeCenterMax;
+
+        if (vy >= 0 && crossesTop && crossesSafeX) {
+            return {
+                eta: frame / 60,
+                dashRequired: usedDash,
+            };
+        }
+
+        if (y > canvas.height + 180) break;
+        if (direction > 0 && x > to.x + to.w + MAX_DASH_H) break;
+        if (direction < 0 && x + player.width < to.x - MAX_DASH_H) break;
+    }
+
+    return null;
+}
+
+function getReachMetrics(from, to) {
+    const rise = from.y - to.y;
+    const gap = platformGap(from, to);
+
+    if (rise > MAX_JUMP_V + 14) return null;
+    if (gap > MAX_DASH_H + 24) return null;
+
+    if (gap === 0 && to.y >= from.y) {
+        const centerDistance = Math.abs((to.x + to.w / 2) - (from.x + from.w / 2));
+        return {
+            eta: Math.max(0.16, centerDistance / (PLAYER_SPEED * 60)),
+            dashRequired: false,
+        };
+    }
+
+    const direction = to.x + to.w / 2 >= from.x + from.w / 2 ? 1 : -1;
+    const noDash = simulateTraversePattern(from, to, direction, null);
+    let bestDash = null;
+
+    for (const dashStartFrame of REACH_DASH_STARTS) {
+        const candidate = simulateTraversePattern(from, to, direction, dashStartFrame);
+        if (!candidate) continue;
+        if (!bestDash || candidate.eta < bestDash.eta) bestDash = candidate;
+    }
+
+    if (noDash) {
+        return {
+            eta: noDash.eta,
+            optimalEta: Math.min(noDash.eta, bestDash ? bestDash.eta : Infinity),
+            dashRequired: false,
+        };
+    }
+
+    if (bestDash) {
+        return {
+            eta: bestDash.eta,
+            optimalEta: bestDash.eta,
+            dashRequired: true,
+        };
+    }
+
+    return null;
+}
+
+function buildTraversalGraph(stageData, obstacles) {
+    const stagePlatforms = stageData.platforms;
+    const edges = Array.from({ length: stagePlatforms.length }, () => []);
+    const safeLanding = stagePlatforms.map(platform => hasSafeLandingZone(platform, obstacles));
+
+    for (let fromIndex = 0; fromIndex < stagePlatforms.length; fromIndex++) {
+        const from = stagePlatforms[fromIndex];
+
+        for (let toIndex = 0; toIndex < stagePlatforms.length; toIndex++) {
+            if (toIndex === fromIndex || !safeLanding[toIndex]) continue;
+
+            const to = stagePlatforms[toIndex];
+            const move = getReachMetrics(from, to);
+            if (!move) continue;
+            if (edgeBlockedByLaser(from, to, obstacles)) continue;
+
+            edges[fromIndex].push({
+                index: toIndex,
+                eta: move.optimalEta ?? move.eta,
+                dashRequired: move.dashRequired,
+            });
+        }
+    }
+
+    return { edges, safeLanding };
+}
+
+function collectReachableIndices(edges, startIndex) {
+    const visited = new Set([startIndex]);
+    const stack = [startIndex];
+
+    while (stack.length) {
+        const current = stack.pop();
+        for (const edge of edges[current]) {
+            if (visited.has(edge.index)) continue;
+            visited.add(edge.index);
+            stack.push(edge.index);
+        }
+    }
+
+    return visited;
+}
+
+function collectReverseReachableIndices(edges, goalIndex) {
+    const reverseEdges = Array.from({ length: edges.length }, () => []);
+    for (let fromIndex = 0; fromIndex < edges.length; fromIndex++) {
+        for (const edge of edges[fromIndex]) {
+            reverseEdges[edge.index].push(fromIndex);
+        }
+    }
+
+    const visited = new Set([goalIndex]);
+    const stack = [goalIndex];
+
+    while (stack.length) {
+        const current = stack.pop();
+        for (const previousIndex of reverseEdges[current]) {
+            if (visited.has(previousIndex)) continue;
+            visited.add(previousIndex);
+            stack.push(previousIndex);
+        }
+    }
+
+    return visited;
+}
+
+function analyzeStageTopology(stageData, obstacles = []) {
+    const stagePlatforms = stageData.platforms;
+    const startIndex = stagePlatforms.indexOf(stageData.spawnPlatform);
+    const goalIndex = stagePlatforms.indexOf(stageData.goalPlatform);
+    const graph = buildTraversalGraph(stageData, obstacles);
+    const reachableFromSpawn = startIndex === -1 ? new Set() : collectReachableIndices(graph.edges, startIndex);
+    const reachableToGoal = goalIndex === -1 ? new Set() : collectReverseReachableIndices(graph.edges, goalIndex);
+    const usableIndices = new Set();
+
+    for (let index = 0; index < stagePlatforms.length; index++) {
+        const platform = stagePlatforms[index];
+        if (platform === stageData.spawnPlatform || platform === stageData.goalPlatform || platform.role === 'floor') {
+            usableIndices.add(index);
+            continue;
+        }
+
+        if (reachableFromSpawn.has(index) && reachableToGoal.has(index)) {
+            usableIndices.add(index);
+        }
+    }
 
     return {
-        eta,
-        dashRequired,
+        startIndex,
+        goalIndex,
+        edges: graph.edges,
+        safeLanding: graph.safeLanding,
+        reachableFromSpawn,
+        reachableToGoal,
+        usableIndices,
+        unreachableIndices: stagePlatforms
+            .map((_, index) => index)
+            .filter(index => !usableIndices.has(index)),
+    };
+}
+
+function pruneDisconnectedPlatforms(stageData) {
+    const topology = analyzeStageTopology(stageData, []);
+    if (!topology.unreachableIndices.length) {
+        return {
+            ...topology,
+            removedPlatforms: 0,
+        };
+    }
+
+    const keepPlatforms = stageData.platforms.filter((_, index) => topology.usableIndices.has(index));
+    const keepSet = new Set(keepPlatforms);
+    stageData.platforms = keepPlatforms;
+    stageData.bugSlots = stageData.bugSlots.filter(slot => keepSet.has(slot.platform));
+    refreshStageGeometry(stageData);
+
+    const nextTopology = analyzeStageTopology(stageData, []);
+    return {
+        ...nextTopology,
+        removedPlatforms: topology.unreachableIndices.length,
     };
 }
 
@@ -1041,6 +1665,7 @@ function validateStage(stageData, obstacles) {
         return { valid: false, reason: 'goal-blocked' };
     }
 
+    const traversal = buildTraversalGraph(stageData, obstacles);
     const costs = Array(stagePlatforms.length).fill(Infinity);
     const previous = Array(stagePlatforms.length).fill(-1);
     const queue = [{ index: startIndex, cost: 0 }];
@@ -1051,22 +1676,12 @@ function validateStage(stageData, obstacles) {
         const current = queue.shift();
         if (current.index === goalIndex) break;
 
-        const from = stagePlatforms[current.index];
-        for (let nextIndex = 0; nextIndex < stagePlatforms.length; nextIndex++) {
-            if (nextIndex === current.index) continue;
-
-            const to = stagePlatforms[nextIndex];
-            if (!hasSafeLandingZone(to, obstacles)) continue;
-
-            const move = getReachMetrics(from, to);
-            if (!move) continue;
-            if (edgeBlockedByLaser(from, to, obstacles)) continue;
-
-            const nextCost = current.cost + move.eta;
-            if (nextCost < costs[nextIndex]) {
-                costs[nextIndex] = nextCost;
-                previous[nextIndex] = current.index;
-                queue.push({ index: nextIndex, cost: nextCost });
+        for (const edge of traversal.edges[current.index]) {
+            const nextCost = current.cost + edge.eta;
+            if (nextCost < costs[edge.index]) {
+                costs[edge.index] = nextCost;
+                previous[edge.index] = current.index;
+                queue.push({ index: edge.index, cost: nextCost });
             }
         }
     }
@@ -1097,6 +1712,85 @@ function validateStage(stageData, obstacles) {
     };
 }
 
+function summarizeCriticalPath(stageData, validation) {
+    const route = validation.pathIndices.map(index => stageData.platforms[index]);
+    const summary = {
+        steps: Math.max(0, route.length - 1),
+        maxGap: 0,
+        maxRise: 0,
+        dashEdges: 0,
+        shortcutSteps: 0,
+    };
+
+    for (let i = 0; i < route.length - 1; i++) {
+        const from = route[i];
+        const to = route[i + 1];
+        const move = getReachMetrics(from, to);
+        const gap = Math.max(0, to.x - (from.x + from.w), from.x - (to.x + to.w));
+        const rise = Math.max(0, from.y - to.y);
+        summary.maxGap = Math.max(summary.maxGap, gap);
+        summary.maxRise = Math.max(summary.maxRise, rise);
+        if (move && move.dashRequired) summary.dashEdges++;
+        if (to.role === 'shortcut') summary.shortcutSteps++;
+    }
+
+    return summary;
+}
+
+function passesStageComfortPolicy(stageData, validation) {
+    if (!validation.valid) {
+        return { ok: false, reason: validation.reason || 'invalid-route' };
+    }
+
+    if (stageData.stageIndex > 6) {
+        return { ok: true, summary: summarizeCriticalPath(stageData, validation) };
+    }
+
+    const summary = summarizeCriticalPath(stageData, validation);
+    const thresholds = {
+        1: { steps: 4, maxGap: 110, maxRise: 48, dashEdges: 0, shortcutSteps: 0 },
+        2: { steps: 5, maxGap: 130, maxRise: 60, dashEdges: 0, shortcutSteps: 0 },
+        3: { steps: 6, maxGap: 160, maxRise: 72, dashEdges: 1, shortcutSteps: 1 },
+        4: { steps: 7, maxGap: 170, maxRise: 82, dashEdges: 1, shortcutSteps: 1 },
+        5: { steps: 8, maxGap: 186, maxRise: 92, dashEdges: 1, shortcutSteps: 2 },
+        6: { steps: 9, maxGap: 205, maxRise: 100, dashEdges: 2, shortcutSteps: 2 },
+    }[stageData.stageIndex];
+
+    const tooManySteps = summary.steps > thresholds.steps;
+    const tooWide = summary.maxGap > thresholds.maxGap;
+    const tooTall = summary.maxRise > thresholds.maxRise;
+    const tooDashy = summary.dashEdges > thresholds.dashEdges;
+    const tooBranchy = summary.shortcutSteps > thresholds.shortcutSteps;
+    const tooTightTime = stageData.isTimeTrial && validation.shortestEta > stageData.timeLimit - 4;
+
+    if (tooManySteps || tooWide || tooTall || tooDashy || tooBranchy || tooTightTime) {
+        return {
+            ok: false,
+            reason: 'over-tuned-early',
+            summary,
+        };
+    }
+
+    return { ok: true, summary };
+}
+
+function runStageVerificationSuite(stageData) {
+    const geometryValidation = validateStage(stageData, []);
+    const obstacleValidation = validateStage(stageData, stageData.obstacles || []);
+    const comfort = stageData.comfort || passesStageComfortPolicy(stageData, obstacleValidation);
+    const criticalPath = obstacleValidation.valid ? summarizeCriticalPath(stageData, obstacleValidation) : null;
+
+    return {
+        geometryValidation,
+        obstacleValidation,
+        comfort,
+        criticalPath,
+        watchdogMargin: stageData.isTimeTrial && obstacleValidation.valid
+            ? stageData.timeLimit - obstacleValidation.shortestEta
+            : null,
+    };
+}
+
 function fitValidatedVariant(stageData) {
     let obstacles = stageData.plannedObstacles.slice().sort((a, b) => b.threat - a.threat);
     let validation = validateStage(stageData, obstacles);
@@ -1108,42 +1802,73 @@ function fitValidatedVariant(stageData) {
         validation = validateStage(stageData, obstacles);
     }
 
+    const comfort = passesStageComfortPolicy(stageData, validation);
+
     return {
-        valid: validation.valid,
+        valid: validation.valid && comfort.ok,
         obstacles,
         removedBugs,
         validation,
+        comfort,
     };
 }
 
 function buildSafeFallbackStage(stageIndex, aiSummary) {
-    const safeArchetype = ARCHETYPES_BY_ID[SAFE_FALLBACK_ARCHETYPE_ID];
-    const fallbackStage = createStageCandidate(stageIndex, safeArchetype, aiSummary, { disableBugs: true });
-    fallbackStage.meta.fallbackLevel = 2;
-    fallbackStage.meta.removedBugs = 0;
-    fallbackStage.validation = validateStage(fallbackStage, []);
-    fallbackStage.obstacles = [];
-    return fallbackStage;
+    const candidateIds = stageIndex <= 2
+        ? ['intro-flats', 'recovery-floor']
+        : stageIndex <= 4
+            ? ['step-up', 'intro-flats', 'recovery-floor', 'split-route']
+            : stageIndex <= 6
+                ? ['split-route', 'step-up', 'low-tunnel', 'intro-flats', 'recovery-floor']
+                : [SAFE_FALLBACK_ARCHETYPE_ID, 'intro-flats', 'step-up'];
+
+    let lastCandidate = null;
+    for (const archetypeId of candidateIds) {
+        const archetype = ARCHETYPES_BY_ID[archetypeId];
+        if (!archetype) continue;
+
+        const safeDirector = createSafeDirector(stageIndex);
+        const candidate = createStageCandidate(stageIndex, archetype, aiSummary, {
+            disableBugs: true,
+            fallbackLevel: 2,
+            director: safeDirector,
+        });
+        candidate.meta.fallbackLevel = 2;
+        candidate.meta.removedBugs = 0;
+        candidate.validation = validateStage(candidate, []);
+        candidate.comfort = passesStageComfortPolicy(candidate, candidate.validation);
+        candidate.obstacles = [];
+        lastCandidate = candidate;
+
+        if (candidate.validation.valid && candidate.comfort.ok) {
+            return candidate;
+        }
+    }
+
+    return lastCandidate;
 }
 
 function buildValidatedStage(stageIndex) {
     const limitedTime = isLimitedTimeStage(stageIndex);
     const aiSummary = computeAIProfileSummary();
+    const primaryDirector = buildStageDirector(stageIndex, aiSummary, limitedTime, 0);
 
-    const primaryArchetype = selectArchetypeForStage(stageIndex, limitedTime);
-    let stageData = createStageCandidate(stageIndex, primaryArchetype, aiSummary);
+    const primaryArchetype = selectArchetypeForStage(stageIndex, limitedTime, primaryDirector);
+    let stageData = createStageCandidate(stageIndex, primaryArchetype, aiSummary, { director: primaryDirector });
     let fitted = fitValidatedVariant(stageData);
 
     if (fitted.valid) {
         stageData.meta.removedBugs = fitted.removedBugs;
         stageData.meta.validationAttempts = fitted.removedBugs + 1;
         stageData.validation = fitted.validation;
+        stageData.comfort = fitted.comfort;
         stageData.obstacles = fitted.obstacles;
         return stageData;
     }
 
-    const fallbackArchetype = pickFallbackArchetype(stageIndex, primaryArchetype, limitedTime);
-    stageData = createStageCandidate(stageIndex, fallbackArchetype, aiSummary);
+    const fallbackDirector = buildStageDirector(stageIndex, aiSummary, limitedTime, 1);
+    const fallbackArchetype = pickFallbackArchetype(stageIndex, primaryArchetype, limitedTime, fallbackDirector);
+    stageData = createStageCandidate(stageIndex, fallbackArchetype, aiSummary, { director: fallbackDirector, fallbackLevel: 1 });
     stageData.meta.fallbackLevel = 1;
     fitted = fitValidatedVariant(stageData);
 
@@ -1151,6 +1876,7 @@ function buildValidatedStage(stageIndex) {
         stageData.meta.removedBugs = fitted.removedBugs;
         stageData.meta.validationAttempts = fitted.removedBugs + 1;
         stageData.validation = fitted.validation;
+        stageData.comfort = fitted.comfort;
         stageData.obstacles = fitted.obstacles;
         return stageData;
     }
@@ -1168,7 +1894,8 @@ function runStageLibrarySelfCheck() {
 
     for (let i = 0; i < STAGE_ARCHETYPES.length; i++) {
         const stageIndex = i + 2;
-        const stageData = createStageCandidate(stageIndex, STAGE_ARCHETYPES[i], aiSummary, { disableBugs: true });
+        const director = buildStageDirector(stageIndex, aiSummary, isLimitedTimeStage(stageIndex), 0);
+        const stageData = createStageCandidate(stageIndex, STAGE_ARCHETYPES[i], aiSummary, { disableBugs: true, director });
         const validation = validateStage(stageData, []);
         if (!validation.valid) {
             failures++;
@@ -1268,50 +1995,56 @@ function showLoadingScreen(stageIndex, callback) {
 
     const result = buildValidatedStage(stageIndex);
     const aiSummary = result.aiSummary;
-    const shortestEtaLabel = Number.isFinite(result.validation.shortestEta) ? result.validation.shortestEta.toFixed(2) : 'n/a';
+    const verification = runStageVerificationSuite(result);
+    const shortestEtaLabel = Number.isFinite(verification.obstacleValidation.shortestEta) ? verification.obstacleValidation.shortestEta.toFixed(2) : 'n/a';
+    const geometryEtaLabel = Number.isFinite(verification.geometryValidation.shortestEta) ? verification.geometryValidation.shortestEta.toFixed(2) : 'n/a';
+    const marginLabel = Number.isFinite(verification.watchdogMargin) ? verification.watchdogMargin.toFixed(2) : null;
+    const pathSummary = verification.criticalPath;
     const messages = [
-        { t: 0, text: `$ hotfix build stage_${String(stageIndex).padStart(3, '0')} --archetype ${result.archetypeId}`, cls: 'lt-info' },
-        { t: 350, text: `[COMPILER]: Loading archetype ${result.archetypeName}...`, cls: 'lt-system', pct: 12 },
-        { t: 700, text: `[AI]: Cleared stages in profile: ${aiSummary.clearedStages}`, cls: 'lt-ai', pct: 24 },
-        { t: 1050, text: `[AI]: Preferred lane => ${aiSummary.preferredLane.toUpperCase()}`, cls: 'lt-ai', pct: 34 },
-        { t: 1400, text: `[AI]: ${aiSummary.tendencyText}`, cls: 'lt-warning', pct: 46 },
-        { t: 1750, text: `[LEVELER]: Tier ${result.tier + 1} | Budget ${result.bugBudget} bug(s)`, cls: 'lt-system', pct: 58 },
-        { t: 2100, text: `[VALIDATOR]: Checking route graph...`, cls: 'lt-system', pct: 72 },
-        { t: 2500, text: `[VALIDATOR]: Route OK (${shortestEtaLabel}s shortest ETA)`, cls: 'lt-success', pct: 86 },
-        { t: 2900, text: `[SYSTEM]: Stage ${stageIndex} ready. Deploying runtime...`, cls: 'lt-success', pct: 100 },
+        { t: 0 * LOADING_STEP_MS, text: `$ hotfix build stage_${String(stageIndex).padStart(3, '0')} --archetype ${result.archetypeId}`, cls: 'lt-info' },
+        { t: 1 * LOADING_STEP_MS, text: `[COMPILER]: Loading archetype ${result.archetypeName}...`, cls: 'lt-system', pct: 10 },
+        { t: 2 * LOADING_STEP_MS, text: `[AI]: Cleared stages in profile: ${aiSummary.clearedStages}`, cls: 'lt-ai', pct: 20 },
+        { t: 3 * LOADING_STEP_MS, text: `[AI]: Preferred lane => ${aiSummary.preferredLane.toUpperCase()}`, cls: 'lt-ai', pct: 28 },
+        { t: 4 * LOADING_STEP_MS, text: `[DIRECTOR]: ${result.variantName} | bias ${result.director.laneBias.toUpperCase()}`, cls: 'lt-ai', pct: 38 },
+        { t: 5 * LOADING_STEP_MS, text: `[AI]: ${aiSummary.tendencyText}`, cls: 'lt-warning', pct: 46 },
+        { t: 6 * LOADING_STEP_MS, text: `[LEVELER]: Tier ${result.tier + 1} | Budget ${result.bugBudget} bug(s)`, cls: 'lt-system', pct: 56 },
+        { t: 7 * LOADING_STEP_MS, text: `[TESTER-1]: Geometry route OK (${geometryEtaLabel}s obstacle-free ETA)`, cls: 'lt-system', pct: 66 },
+        { t: 8 * LOADING_STEP_MS, text: `[TESTER-2]: Obstacle route OK (${shortestEtaLabel}s live ETA)`, cls: 'lt-success', pct: 78 },
+        { t: 9 * LOADING_STEP_MS, text: `[TESTER-3]: Comfort gate ${verification.comfort.ok ? 'PASS' : 'FAIL'}${pathSummary ? ` | steps ${pathSummary.steps} | gap ${Math.round(pathSummary.maxGap)} | rise ${Math.round(pathSummary.maxRise)}` : ''}`, cls: verification.comfort.ok ? 'lt-success' : 'lt-error', pct: 88 },
+        { t: 10 * LOADING_STEP_MS, text: `[SYSTEM]: Stage ${stageIndex} ready. Deploying runtime...`, cls: 'lt-success', pct: 100 },
     ];
 
     if (result.isTimeTrial) {
-        messages.splice(5, 0, {
-            t: 1600,
-            text: `[WATCHDOG]: LIMITED TIME STAGE - ${result.timeLimit}s`,
+        messages.splice(6, 0, {
+            t: 6.5 * LOADING_STEP_MS,
+            text: `[WATCHDOG]: LIMITED TIME STAGE - ${result.timeLimit}s${marginLabel !== null ? ` | margin ${marginLabel}s` : ''}`,
             cls: 'lt-error',
-            pct: 52,
+            pct: 50,
         });
     }
 
     if (result.meta.removedBugs > 0) {
         messages.splice(messages.length - 2, 0, {
-            t: 2250,
+            t: 8.5 * LOADING_STEP_MS,
             text: `[VALIDATOR]: Removed ${result.meta.removedBugs} bug(s) to preserve a valid route.`,
             cls: 'lt-warning',
-            pct: 78,
+            pct: 84,
         });
     }
 
     if (result.meta.fallbackLevel === 1) {
         messages.splice(5, 0, {
-            t: 1600,
+            t: 4.5 * LOADING_STEP_MS,
             text: `[SYSTEM]: Primary archetype failed. Switching to fallback build.`,
             cls: 'lt-warning',
-            pct: 50,
+            pct: 42,
         });
     } else if (result.meta.fallbackLevel === 2) {
         messages.splice(5, 0, {
-            t: 1600,
+            t: 4.5 * LOADING_STEP_MS,
             text: `[SYSTEM]: Escalating to safe fallback build.`,
             cls: 'lt-error',
-            pct: 50,
+            pct: 42,
         });
     }
 
@@ -1340,11 +2073,11 @@ function showLoadingScreen(stageIndex, callback) {
             setTimeout(() => {
                 loadingOverlay.classList.add('hidden');
                 callback(result);
-            }, 400);
+            }, LOADING_DEPLOY_DELAY_MS);
             return;
         }
 
-        loadingStatus.textContent = messageIndex < 4 ? 'Compiling...' : messageIndex < 7 ? 'Profiling...' : 'Validating...';
+        loadingStatus.textContent = messageIndex < 4 ? 'Compiling...' : messageIndex < 7 ? 'Profiling...' : 'Testing stage...';
         requestAnimationFrame(tick);
     }
 
@@ -1629,6 +2362,7 @@ function startGame() {
 
     playerName = (playerNameInput.value.trim() || 'anonymous').substring(0, 16);
     localStorage.setItem('hotfix_player_name', playerName);
+    beginCampaignRun();
 
     titleScreen.classList.add('hidden');
     gameScreen.classList.remove('hidden');
@@ -1657,6 +2391,7 @@ function applyStageResult(stageData) {
     currentPath = [];
     previousPaths = [];
     lastArchetypeId = stageData.archetypeId;
+    registerDirectorMemory(stageData);
 }
 
 function startRun() {
@@ -1693,7 +2428,8 @@ function startRun() {
     hudTimer.textContent = '00:00.000';
 
     logConsole(`[SYSTEM]: === STAGE ${currentStage}${isTimeTrial ? ' [LIMITED TIME]' : ''} ===`, 'system');
-    logConsole(`[SYSTEM]: Archetype ${currentStageData.archetypeName} | Budget ${currentStageData.bugBudget} | Live ${aiObstacles.length}`, 'system');
+    logConsole(`[AI]: Director ${currentStageData.variantName} | Archetype ${currentStageData.archetypeName}`, 'ai');
+    logConsole(`[SYSTEM]: Budget ${currentStageData.bugBudget} | Live ${aiObstacles.length} | Seed ${currentStageData.director.variantCode}`, 'system');
     if (isTimeTrial) {
         logConsole(`[WARNING]: LIMITED TIME STAGE - clear in ${timeLimit}s.`, 'warning');
     }
@@ -1705,12 +2441,7 @@ function advanceToNextStage() {
         applyStageResult(result);
         showLimitedTimeStageAlert(result, startRun);
     };
-
-    if (currentStage === 1) {
-        bootStage(buildValidatedStage(1));
-    } else {
-        showLoadingScreen(currentStage, bootStage);
-    }
+    showLoadingScreen(currentStage, bootStage);
 }
 
 function restartCampaign() {
@@ -1718,6 +2449,7 @@ function restartCampaign() {
     winOverlay.classList.add('hidden');
     stageAlert.classList.add('hidden');
     loadingOverlay.classList.add('hidden');
+    beginCampaignRun();
     resetCampaignState();
     advanceToNextStage();
 }
@@ -2178,7 +2910,7 @@ function drawStageIndicator() {
         ctx.fillStyle = '#8b949e';
         ctx.globalAlpha = alpha * 0.65;
         const limitText = currentStageData.isTimeTrial ? `${currentStageData.timeLimit}s watchdog` : 'No limit';
-        ctx.fillText(`${currentStageData.archetypeName} | ${aiObstacles.length} bug(s) | ${limitText}`, canvas.width / 2, canvas.height / 2 - 12);
+        ctx.fillText(`${currentStageData.variantName} | ${aiObstacles.length} bug(s) | ${limitText}`, canvas.width / 2, canvas.height / 2 - 12);
         ctx.globalAlpha = 1;
         ctx.textAlign = 'left';
     }
