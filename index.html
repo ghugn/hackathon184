@@ -7,11 +7,13 @@
     <title>Hotfix: The Game — Speedrun the Codebase</title>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Fira+Code:wght@300;400;500;600;700&family=JetBrains+Mono:wght@300;400;500;700&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Fira+Code:wght@300;400;500;600;700&family=JetBrains+Mono:wght@300;400;500;700&family=Orbitron:wght@500;700;800&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="style.css">
 </head>
 <body>
     <div id="app">
+        <button id="audio-toggle" class="audio-toggle" type="button">AUDIO ON</button>
+
         <!-- Title Screen -->
         <div id="title-screen">
             <div class="title-container">
@@ -27,6 +29,16 @@
                 <div class="name-input-row">
                     <span class="name-label">HANDLE:</span>
                     <input type="text" id="player-name" class="name-input" placeholder="anonymous" maxlength="16" spellcheck="false" autocomplete="off">
+                </div>
+                <div class="menu-settings">
+                    <label class="menu-toggle">
+                        <input type="checkbox" id="toggle-obstacle-alerts" checked>
+                        <span>Show new hazard alerts</span>
+                    </label>
+                    <label class="menu-toggle">
+                        <input type="checkbox" id="toggle-ability-alerts" checked>
+                        <span>Show ability unlock alerts</span>
+                    </label>
                 </div>
                 <button id="start-btn" class="neon-btn">
                     <span class="btn-bracket">{</span> START <span class="btn-bracket">}</span>
@@ -141,6 +153,7 @@
                 <div class="stage-alert-lines"></div>
                 <div id="stage-alert-title" class="stage-alert-title">LIMITED TIME STAGE</div>
                 <div id="stage-alert-subtitle" class="stage-alert-subtitle">COMPLETE IN 24s</div>
+                <div id="stage-alert-body" class="stage-alert-body"></div>
             </div>
         </div>
 
