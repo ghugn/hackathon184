@@ -29,6 +29,11 @@ const LOADING_DEPLOY_DELAY_MS = 700;
 const REACH_SIM_FRAMES = 72;
 const SAFE_LANDING_MARGIN = 8;
 const REACH_DASH_STARTS = [4, 6, 8, 10, 12, 14];
+const TESTER_PROFILES = [
+    { id: 'scout', label: 'Scout', gapBias: 0.9, riseBias: 0.92, comboBias: 0.9, marginBias: 1.12, landingBias: 1.04 },
+    { id: 'runner', label: 'Runner', gapBias: 1.02, riseBias: 1.04, comboBias: 1.03, marginBias: 0.92, landingBias: 0.94 },
+    { id: 'architect', label: 'Architect', gapBias: 0.95, riseBias: 0.98, comboBias: 0.96, marginBias: 1.05, landingBias: 1.02 },
+];
 const FLOOR_HEIGHT = 30;
 const SAFE_FALLBACK_ARCHETYPE_ID = 'recovery-floor';
 const ENCOURAGEMENT_LINES = [
@@ -39,6 +44,11 @@ const ENCOURAGEMENT_LINES = [
     'Keep pushing, the AI is learning too.',
     'Another run, better route.',
 ];
+const EXTERNAL_STAGE_LIBRARY = window.AI_STAGE_LIBRARY && Array.isArray(window.AI_STAGE_LIBRARY.blueprints)
+    ? window.AI_STAGE_LIBRARY
+    : null;
+const EXTERNAL_STAGE_BLUEPRINTS = EXTERNAL_STAGE_LIBRARY?.blueprints || [];
+const EXTERNAL_STAGE_BLUEPRINT_MAP = new Map(EXTERNAL_STAGE_BLUEPRINTS.map(blueprint => [blueprint.stageIndex, blueprint]));
 
 const COLORS = {
     bg: '#0d1117',
@@ -222,6 +232,30 @@ function resetAIProfile() {
 
 function beginCampaignRun() {
     directorState.runSerial++;
+}
+
+function getExternalStageBlueprint(stageIndex) {
+    if (!EXTERNAL_STAGE_BLUEPRINTS.length || stageIndex <= 0) return null;
+
+    const exact = EXTERNAL_STAGE_BLUEPRINT_MAP.get(stageIndex);
+    const baseBlueprint = exact || EXTERNAL_STAGE_BLUEPRINTS[(stageIndex - 1) % EXTERNAL_STAGE_BLUEPRINTS.length];
+    if (!baseBlueprint) return null;
+
+    const cycle = exact ? 0 : Math.floor((stageIndex - 1) / EXTERNAL_STAGE_BLUEPRINTS.length);
+    return {
+        ...baseBlueprint,
+        stageIndex,
+        cycle,
+        remixLevel: clamp((baseBlueprint.remixLevel ?? 0.28) + cycle * 0.04, 0.12, 0.96),
+        gapScale: clamp((baseBlueprint.gapScale ?? 1) + cycle * 0.035, 0.72, 1.4),
+        riseScale: clamp((baseBlueprint.riseScale ?? 1) + cycle * 0.025, 0.74, 1.32),
+        widthScale: clamp((baseBlueprint.widthScale ?? 1) - cycle * 0.015, 0.82, 1.2),
+        bugBudgetBias: (baseBlueprint.bugBudgetBias ?? 0) + Math.min(cycle, 3),
+        timeLimit: baseBlueprint.timeTrial
+            ? Math.max(18, (baseBlueprint.timeLimit ?? 32) - cycle)
+            : 0,
+        label: cycle > 0 ? `${baseBlueprint.label} Mk.${cycle + 1}` : baseBlueprint.label,
+    };
 }
 
 // ============================================
@@ -787,6 +821,7 @@ const DIRECTOR_LABELS = {
 
 function buildStageDirector(stageIndex, aiSummary, limitedTime, fallbackLevel = 0) {
     directorState.buildSerial++;
+    const blueprint = getExternalStageBlueprint(stageIndex);
     const recentDeath = aiProfile.recentDeaths[aiProfile.recentDeaths.length - 1];
     const seed = hashString([
         directorState.runSerial,
@@ -800,9 +835,10 @@ function buildStageDirector(stageIndex, aiSummary, limitedTime, fallbackLevel = 
         Math.round(aiSummary.avgSpeed * 100),
         aiSummary.clearedStages,
         recentDeath ? `${recentDeath.stageIndex}:${recentDeath.cause}` : 'clean',
+        blueprint ? blueprint.id : 'runtime',
     ].join('|'));
     const rng = createRng(seed);
-    const onboardingBand = stageIndex <= 2 ? 'intro' : stageIndex <= 4 ? 'teach' : stageIndex <= 6 ? 'bridge' : 'full';
+    const onboardingBand = blueprint?.onboardingBand || (stageIndex <= 2 ? 'intro' : stageIndex <= 4 ? 'teach' : stageIndex <= 6 ? 'bridge' : 'full');
 
     let mode = weightedPick(rng, [
         { value: 'flow', weight: limitedTime ? 2.6 : 1.6 },
@@ -816,6 +852,7 @@ function buildStageDirector(stageIndex, aiSummary, limitedTime, fallbackLevel = 
     if (onboardingBand === 'intro') mode = rng.pick(['flow', 'recovery']);
     else if (onboardingBand === 'teach') mode = rng.pick(['flow', 'recovery', 'sprint']);
     else if (onboardingBand === 'bridge' && !limitedTime) mode = rng.pick(['flow', 'sprint', 'switchback', 'fork']);
+    if (blueprint?.mode) mode = blueprint.mode;
 
     let laneBias = weightedPick(rng, [
         { value: aiSummary.preferredLane, weight: 2.3 },
@@ -825,6 +862,7 @@ function buildStageDirector(stageIndex, aiSummary, limitedTime, fallbackLevel = 
     ], 'mid');
     if (onboardingBand === 'intro') laneBias = rng.pick(['mid', 'low']);
     else if (onboardingBand === 'teach') laneBias = rng.pick(['mid', 'low', 'high']);
+    if (blueprint?.laneBias) laneBias = blueprint.laneBias;
 
     let remixLevel = clamp(
         0.28 + stageTier(stageIndex) * 0.11 + directorState.runSerial * 0.06 + aiSummary.confidence * 0.2 - fallbackLevel * 0.15,
@@ -834,12 +872,15 @@ function buildStageDirector(stageIndex, aiSummary, limitedTime, fallbackLevel = 
     if (onboardingBand === 'intro') remixLevel = clamp(0.18 + directorState.runSerial * 0.04, 0.16, 0.38);
     else if (onboardingBand === 'teach') remixLevel = clamp(0.24 + directorState.runSerial * 0.05, 0.22, 0.46);
     else if (onboardingBand === 'bridge') remixLevel = clamp(0.34 + directorState.runSerial * 0.05 + aiSummary.confidence * 0.1, 0.32, 0.58);
+    if (blueprint?.remixLevel !== undefined) {
+        remixLevel = clamp(blueprint.remixLevel - fallbackLevel * 0.05, 0.12, 0.96);
+    }
 
     return {
         seed,
         variantCode: seed.toString(16).slice(-4).toUpperCase(),
         mode,
-        label: DIRECTOR_LABELS[mode],
+        label: blueprint?.label || DIRECTOR_LABELS[mode],
         laneBias,
         onboardingBand,
         remixLevel,
@@ -863,18 +904,21 @@ function buildStageDirector(stageIndex, aiSummary, limitedTime, fallbackLevel = 
                 ? 0.34
                 : clamp(0.14 + remixLevel * 0.25 + (limitedTime ? 0.12 : 0), 0.14, 0.62),
         routeSplitBias: mode === 'fork' ? 1.4 : mode === 'recovery' ? 0.7 : 1,
+        blueprint,
+        source: blueprint ? 'python-library' : 'runtime',
     };
 }
 
 function createSafeDirector(stageIndex) {
+    const blueprint = getExternalStageBlueprint(stageIndex);
     const seed = hashString(`safe|${directorState.runSerial}|${stageIndex}|${directorState.buildSerial}`);
     return {
         seed,
         variantCode: `S${seed.toString(16).slice(-3).toUpperCase()}`,
-        mode: 'flow',
-        label: stageIndex <= 3 ? 'Gentle Onboarding' : 'Safe Route',
-        laneBias: 'mid',
-        onboardingBand: stageIndex <= 2 ? 'intro' : stageIndex <= 6 ? 'teach' : 'full',
+        mode: blueprint?.mode || 'flow',
+        label: blueprint?.label || (stageIndex <= 3 ? 'Gentle Onboarding' : 'Safe Route'),
+        laneBias: blueprint?.laneBias || 'mid',
+        onboardingBand: blueprint?.onboardingBand || (stageIndex <= 2 ? 'intro' : stageIndex <= 6 ? 'teach' : 'full'),
         remixLevel: stageIndex <= 2 ? 0.12 : stageIndex <= 6 ? 0.18 : 0.24,
         widthVariance: 0.03,
         gapVariance: stageIndex <= 2 ? 4 : 8,
@@ -884,6 +928,8 @@ function createSafeDirector(stageIndex) {
         connectorChance: 0.08,
         supportChance: 0.54,
         routeSplitBias: 0.4,
+        blueprint,
+        source: blueprint ? 'python-library-safe' : 'runtime-safe',
     };
 }
 
@@ -1054,20 +1100,31 @@ const STAGE_ARCHETYPES = [
 const ARCHETYPES_BY_ID = Object.fromEntries(STAGE_ARCHETYPES.map(archetype => [archetype.id, archetype]));
 
 function isLimitedTimeStage(stageIndex) {
+    const blueprint = getExternalStageBlueprint(stageIndex);
+    if (blueprint?.timeTrial !== undefined) {
+        return !!blueprint.timeTrial;
+    }
     return stageIndex >= 8 && stageIndex % 4 === 0;
 }
 
 function computeTimeLimit(stageIndex) {
+    const blueprint = getExternalStageBlueprint(stageIndex);
+    if (blueprint?.timeTrial && blueprint.timeLimit) {
+        return blueprint.timeLimit;
+    }
     const trialIndex = Math.floor((stageIndex - 8) / 4);
     return Math.max(20, 32 - Math.max(0, trialIndex) * 2);
 }
 
 function computeBugBudget(stageIndex, aiConfidence, limitedTime) {
+    const blueprint = getExternalStageBlueprint(stageIndex);
     let budget = clamp(Math.floor((stageIndex - 5) / 3), 0, 6);
     if (stageIndex <= 4) budget = 0;
     else if (stageIndex <= 6) budget = Math.min(budget, 1);
     if (limitedTime) budget -= 1;
     if (aiConfidence < 0.45) budget -= 1;
+    if (blueprint?.bugBudgetBias !== undefined) budget += blueprint.bugBudgetBias;
+    if (blueprint?.bugBudgetCap !== undefined && blueprint.bugBudgetCap !== null) budget = Math.min(budget, blueprint.bugBudgetCap);
     return Math.max(0, budget);
 }
 
@@ -1083,6 +1140,10 @@ function archetypeRecentPenalty(archetypeId) {
 }
 
 function selectArchetypeForStage(stageIndex, limitedTime, director) {
+    if (director.blueprint?.archetypeId && ARCHETYPES_BY_ID[director.blueprint.archetypeId]) {
+        return ARCHETYPES_BY_ID[director.blueprint.archetypeId];
+    }
+
     const rng = createRng(director.seed ^ 0x51f15e3d);
     const tier = stageTier(stageIndex);
     let targetDifficulty = clamp(tier + 2 + Math.floor(stageIndex / 10), 1, 7);
@@ -1126,6 +1187,10 @@ function selectArchetypeForStage(stageIndex, limitedTime, director) {
 }
 
 function pickFallbackArchetype(stageIndex, primary, limitedTime, director) {
+    if (director.blueprint?.fallbackArchetypeId && ARCHETYPES_BY_ID[director.blueprint.fallbackArchetypeId]) {
+        return ARCHETYPES_BY_ID[director.blueprint.fallbackArchetypeId];
+    }
+
     const rng = createRng(director.seed ^ 0x85ebca6b);
     const targetDifficulty = Math.max(0, primary.difficulty - 1);
     const candidates = STAGE_ARCHETYPES.filter(archetype => {
@@ -1147,26 +1212,29 @@ function pickFallbackArchetype(stageIndex, primary, limitedTime, director) {
 
 function decorateStageDifficulty(stageIndex, stageData, director) {
     const limitedTime = isLimitedTimeStage(stageIndex);
+    const blueprint = director.blueprint;
     const tier = stageTier(stageIndex);
     const effectiveTier = limitedTime ? Math.max(0, tier - 1) : tier;
     const onboardingWideBoost = director.onboardingBand === 'intro' ? 0.14 : director.onboardingBand === 'teach' ? 0.08 : director.onboardingBand === 'bridge' ? 0.04 : 0;
-    const widthScale = clamp(1 - effectiveTier * 0.03 + (director.mode === 'recovery' ? 0.05 : 0) - director.remixLevel * 0.05 + onboardingWideBoost, 0.78, 1.16);
-    const gapPush = director.onboardingBand === 'intro'
+    const widthScale = clamp((1 - effectiveTier * 0.03 + (director.mode === 'recovery' ? 0.05 : 0) - director.remixLevel * 0.05 + onboardingWideBoost) * (blueprint?.widthScale ?? 1), 0.76, 1.22);
+    const gapPush = (director.onboardingBand === 'intro'
         ? director.gapVariance * 0.28
         : director.onboardingBand === 'teach'
             ? effectiveTier * 10 + director.gapVariance * 0.4
-            : effectiveTier * 18 + director.gapVariance * (limitedTime ? 0.55 : 1);
-    const verticalPush = director.onboardingBand === 'intro'
+            : effectiveTier * 18 + director.gapVariance * (limitedTime ? 0.55 : 1)) * (blueprint?.gapScale ?? 1);
+    const verticalPush = (director.onboardingBand === 'intro'
         ? director.verticalVariance * 0.04
         : director.onboardingBand === 'teach'
             ? effectiveTier * 2 + director.verticalVariance * 0.08
-            : effectiveTier * 5 + director.verticalVariance * 0.18;
+            : effectiveTier * 5 + director.verticalVariance * 0.18) * (blueprint?.riseScale ?? 1);
     const rng = createRng(director.seed ^ 0x27d4eb2f);
 
     stageData.tier = tier;
     stageData.isTimeTrial = limitedTime;
     stageData.timeLimit = limitedTime ? computeTimeLimit(stageIndex) : 0;
     stageData.director = director;
+    stageData.blueprint = blueprint;
+    stageData.blueprintProvider = EXTERNAL_STAGE_LIBRARY?.provider || null;
     stageData.variantName = `${director.label} ${director.variantCode}`;
 
     for (let i = 1; i < stageData.platforms.length; i++) {
@@ -1188,6 +1256,19 @@ function decorateStageDifficulty(stageIndex, stageData, director) {
             const bias = laneOffsetForBias(platform.routeLane, director);
             platform.y = clamp(platform.y - Math.round(progress * verticalPush) + Math.round(bias + jitter * 0.3), 76, canvas.height - 84);
         }
+    }
+
+    if (blueprint?.supportChance !== undefined) {
+        stageData.director.supportChance = clamp(blueprint.supportChance, 0, 0.9);
+    }
+    if (blueprint?.connectorChance !== undefined) {
+        stageData.director.connectorChance = clamp(blueprint.connectorChance, 0, 0.9);
+    }
+    if (blueprint?.branchChance !== undefined) {
+        stageData.director.branchChance = clamp(blueprint.branchChance, 0, 0.9);
+    }
+    if (blueprint?.routeSplitBias !== undefined) {
+        stageData.director.routeSplitBias = clamp(blueprint.routeSplitBias, 0.2, 1.6);
     }
 
     remixStageWithDirector(stageData, director);
@@ -1331,6 +1412,7 @@ function createStageCandidate(stageIndex, archetype, aiSummary, options = {}) {
     stageData.meta = {
         removedBugs: 0,
         removedPlatforms: topology.removedPlatforms,
+        redesigns: 0,
         fallbackLevel: 0,
         validationAttempts: 0,
     };
@@ -1412,7 +1494,7 @@ function platformGap(from, to) {
     return 0;
 }
 
-function simulateTraversePattern(from, to, direction, dashStartFrame = null) {
+function simulateTraversePattern(from, to, stagePlatforms, direction, dashStartFrame = null) {
     const startX = direction > 0
         ? from.x + from.w - player.width - 1
         : from.x + 1;
@@ -1451,30 +1533,44 @@ function simulateTraversePattern(from, to, direction, dashStartFrame = null) {
         }
 
         x += vx;
-        y += vy;
+        for (const platform of stagePlatforms) {
+            if (platform === from && y + player.height <= from.y + 1) continue;
+            if (!aabb(x, y, player.width, player.height, platform.x, platform.y, platform.w, platform.h)) continue;
 
-        const prevCenter = prevX + player.width / 2;
-        const nextCenter = x + player.width / 2;
-        const minCenter = Math.min(prevCenter, nextCenter);
-        const maxCenter = Math.max(prevCenter, nextCenter);
-        const prevBottom = prevY + player.height;
-        const nextBottom = y + player.height;
-        const prevTop = prevY;
-        const nextTop = y;
-        const overlapsTargetX = maxCenter >= to.x + 2 && minCenter <= to.x + to.w - 2;
-
-        if (vy < 0 && overlapsTargetX && prevTop >= to.y + to.h && nextTop <= to.y + to.h) {
-            return null;
+            if (vx > 0) x = platform.x - player.width;
+            else if (vx < 0) x = platform.x + platform.w;
+            vx = 0;
         }
 
-        const crossesTop = prevBottom <= to.y && nextBottom >= to.y;
-        const crossesSafeX = maxCenter >= safeCenterMin && minCenter <= safeCenterMax;
+        y += vy;
+        let landedPlatform = null;
+        for (const platform of stagePlatforms) {
+            if (!aabb(x, y, player.width, player.height, platform.x, platform.y, platform.w, platform.h)) continue;
 
-        if (vy >= 0 && crossesTop && crossesSafeX) {
-            return {
-                eta: frame / 60,
-                dashRequired: usedDash,
-            };
+            if (vy > 0) {
+                y = platform.y - player.height;
+                vy = 0;
+                landedPlatform = platform;
+            } else if (vy < 0) {
+                y = platform.y + platform.h;
+                vy = 0;
+            }
+        }
+
+        if (landedPlatform) {
+            if (landedPlatform !== to) {
+                return null;
+            }
+
+            const center = x + player.width / 2;
+            if (center >= safeCenterMin && center <= safeCenterMax) {
+                return {
+                    eta: frame / 60,
+                    dashRequired: usedDash,
+                };
+            }
+
+            return null;
         }
 
         if (y > canvas.height + 180) break;
@@ -1485,7 +1581,7 @@ function simulateTraversePattern(from, to, direction, dashStartFrame = null) {
     return null;
 }
 
-function getReachMetrics(from, to) {
+function getReachMetrics(from, to, stagePlatforms = [from, to]) {
     const rise = from.y - to.y;
     const gap = platformGap(from, to);
 
@@ -1501,11 +1597,11 @@ function getReachMetrics(from, to) {
     }
 
     const direction = to.x + to.w / 2 >= from.x + from.w / 2 ? 1 : -1;
-    const noDash = simulateTraversePattern(from, to, direction, null);
+    const noDash = simulateTraversePattern(from, to, stagePlatforms, direction, null);
     let bestDash = null;
 
     for (const dashStartFrame of REACH_DASH_STARTS) {
-        const candidate = simulateTraversePattern(from, to, direction, dashStartFrame);
+        const candidate = simulateTraversePattern(from, to, stagePlatforms, direction, dashStartFrame);
         if (!candidate) continue;
         if (!bestDash || candidate.eta < bestDash.eta) bestDash = candidate;
     }
@@ -1541,7 +1637,7 @@ function buildTraversalGraph(stageData, obstacles) {
             if (toIndex === fromIndex || !safeLanding[toIndex]) continue;
 
             const to = stagePlatforms[toIndex];
-            const move = getReachMetrics(from, to);
+            const move = getReachMetrics(from, to, stagePlatforms);
             if (!move) continue;
             if (edgeBlockedByLaser(from, to, obstacles)) continue;
 
@@ -1725,7 +1821,7 @@ function summarizeCriticalPath(stageData, validation) {
     for (let i = 0; i < route.length - 1; i++) {
         const from = route[i];
         const to = route[i + 1];
-        const move = getReachMetrics(from, to);
+        const move = getReachMetrics(from, to, stageData.platforms);
         const gap = Math.max(0, to.x - (from.x + from.w), from.x - (to.x + to.w));
         const rise = Math.max(0, from.y - to.y);
         summary.maxGap = Math.max(summary.maxGap, gap);
@@ -1735,6 +1831,178 @@ function summarizeCriticalPath(stageData, validation) {
     }
 
     return summary;
+}
+
+function getTesterBudgets(stageData, profile) {
+    const blueprint = stageData.blueprint;
+    const tier = stageTier(stageData.stageIndex);
+    const onboardingFactor = stageData.stageIndex <= 4 ? -12 : stageData.stageIndex <= 8 ? -4 : 0;
+    const limitedTimePenalty = stageData.isTimeTrial ? 18 : 0;
+    const gapBudget = (148 + stageData.stageIndex * 4 + tier * 12 + onboardingFactor - limitedTimePenalty) * profile.gapBias * (blueprint?.testerGapBias ?? 1);
+    const riseBudget = (60 + stageData.stageIndex * 2 + tier * 6 + Math.min(stageData.stageIndex, 6) - (stageData.isTimeTrial ? 10 : 0)) * profile.riseBias * (blueprint?.testerRiseBias ?? 1);
+    const comboBudget = (208 + stageData.stageIndex * 6 + tier * 14 + onboardingFactor - (stageData.isTimeTrial ? 24 : 0)) * profile.comboBias * (blueprint?.testerComboBias ?? 1);
+    const maxDashEdges = stageData.isTimeTrial
+        ? 1 + Math.floor(Math.max(0, stageData.stageIndex - 12) / 8)
+        : 1 + Math.floor(Math.max(0, stageData.stageIndex - 8) / 7);
+    const maxDashStreak = stageData.stageIndex >= 14 && !stageData.isTimeTrial ? 2 : 1;
+    const minLandingWidth = Math.max(88, (stageData.isTimeTrial ? 122 : 112) * profile.landingBias - tier * 2);
+    const minTimeMargin = stageData.isTimeTrial
+        ? Math.max(4.2, (stageData.stageIndex <= 10 ? 7.2 : 5.6) * profile.marginBias)
+        : 0;
+
+    return {
+        gapBudget,
+        riseBudget,
+        comboBudget,
+        maxDashEdges,
+        maxDashStreak,
+        minLandingWidth,
+        minTimeMargin,
+    };
+}
+
+function runTesterSquad(stageData, validation) {
+    if (!validation.valid) {
+        return {
+            ok: false,
+            requiredPasses: TESTER_PROFILES.length,
+            passCount: 0,
+            results: TESTER_PROFILES.map(profile => ({
+                id: profile.id,
+                label: profile.label,
+                pass: false,
+                reasons: ['invalid-route'],
+            })),
+        };
+    }
+
+    const route = validation.pathIndices.map(index => stageData.platforms[index]);
+    const results = TESTER_PROFILES.map(profile => {
+        const budgets = getTesterBudgets(stageData, profile);
+        const reasons = [];
+        let dashEdges = 0;
+        let dashStreak = 0;
+        let peakCombo = 0;
+
+        for (let i = 0; i < route.length - 1; i++) {
+            const from = route[i];
+            const to = route[i + 1];
+            const move = getReachMetrics(from, to, stageData.platforms);
+            if (!move) {
+                reasons.push(`edge-${i + 1}-unreachable`);
+                continue;
+            }
+
+            const gap = platformGap(from, to);
+            const rise = Math.max(0, from.y - to.y);
+            const landingAssist = Math.max(0, to.w - 120) * 0.2 + Math.max(0, from.w - 120) * 0.08;
+            const effectiveGap = Math.max(0, gap - landingAssist);
+            const comboLoad = effectiveGap + rise * 0.78 + (move.dashRequired ? 30 : 0);
+            peakCombo = Math.max(peakCombo, comboLoad);
+
+            if (move.dashRequired) {
+                dashEdges++;
+                dashStreak++;
+            } else {
+                dashStreak = 0;
+            }
+
+            if (effectiveGap > budgets.gapBudget) reasons.push(`edge-${i + 1}-gap`);
+            if (rise > budgets.riseBudget) reasons.push(`edge-${i + 1}-rise`);
+            if (comboLoad > budgets.comboBudget) reasons.push(`edge-${i + 1}-combo`);
+            if (move.dashRequired && dashEdges > budgets.maxDashEdges) reasons.push('dash-count');
+            if (move.dashRequired && dashStreak > budgets.maxDashStreak) reasons.push('dash-streak');
+            if (to.w < budgets.minLandingWidth && rise > budgets.riseBudget * 0.72) reasons.push(`edge-${i + 1}-landing`);
+        }
+
+        if (stageData.isTimeTrial && validation.shortestEta > stageData.timeLimit - budgets.minTimeMargin) {
+            reasons.push('watchdog-margin');
+        }
+
+        return {
+            id: profile.id,
+            label: profile.label,
+            pass: reasons.length === 0,
+            reasons,
+            budgets,
+            peakCombo: Math.round(peakCombo),
+            dashEdges,
+        };
+    });
+
+    const passCount = results.filter(result => result.pass).length;
+    const requiredPasses = stageData.isTimeTrial || stageData.stageIndex <= 10 ? TESTER_PROFILES.length : 2;
+    const architectPass = results.some(result => result.id === 'architect' && result.pass);
+
+    return {
+        ok: passCount >= requiredPasses && architectPass,
+        passCount,
+        requiredPasses,
+        results,
+        summary: results.map(result => `${result.label}:${result.pass ? 'PASS' : 'FAIL'}`).join(' | '),
+    };
+}
+
+function rebalanceStageRoute(stageData, validation, testerSquad) {
+    if (!validation.valid) return false;
+
+    const architect = testerSquad.results.find(result => result.id === 'architect');
+    if (!architect) return false;
+
+    const targetGap = architect.budgets.gapBudget - (stageData.isTimeTrial ? 18 : 8);
+    const targetRise = architect.budgets.riseBudget - (stageData.isTimeTrial ? 8 : 4);
+    let changed = false;
+
+    for (let i = 0; i < validation.pathIndices.length - 1; i++) {
+        const from = stageData.platforms[validation.pathIndices[i]];
+        const to = stageData.platforms[validation.pathIndices[i + 1]];
+        const move = getReachMetrics(from, to, stageData.platforms);
+        const gap = platformGap(from, to);
+        const rise = Math.max(0, from.y - to.y);
+
+        if (gap > targetGap) {
+            const shift = Math.min(72, Math.ceil((gap - targetGap) * (stageData.isTimeTrial ? 0.9 : 0.65)));
+            for (const platform of stageData.platforms) {
+                if (platform === stageData.spawnPlatform) continue;
+                if (platform.x < to.x) continue;
+                platform.x = Math.max(stageData.spawnPlatform.x + stageData.spawnPlatform.w + 36, platform.x - shift);
+            }
+            changed = true;
+        }
+
+        if (rise > targetRise) {
+            const drop = Math.min(52, Math.ceil((rise - targetRise) * 0.8));
+            for (const platform of stageData.platforms) {
+                if (platform === stageData.spawnPlatform || platform.role === 'floor') continue;
+                if (platform.x + platform.w <= from.x) continue;
+                platform.y = clamp(platform.y + drop, 76, canvas.height - 84);
+            }
+            changed = true;
+        }
+
+        const minimumLanding = Math.ceil(architect.budgets.minLandingWidth + (stageData.isTimeTrial ? 12 : 6));
+        if (to.role !== 'goal' && to.role !== 'floor' && to.w < minimumLanding) {
+            to.w = minimumLanding;
+            changed = true;
+        }
+
+        if (move && move.dashRequired && stageData.isTimeTrial && to.w < minimumLanding + 18) {
+            to.w = minimumLanding + 18;
+            changed = true;
+        }
+    }
+
+    if (!changed) return false;
+
+    refreshStageGeometry(stageData);
+    const topology = pruneDisconnectedPlatforms(stageData);
+    stageData.meta.removedPlatforms += topology.removedPlatforms;
+    stageData.topology = topology;
+
+    const obstaclePlan = planStageObstacles(stageData, stageData.aiSummary);
+    stageData.bugBudget = obstaclePlan.bugBudget;
+    stageData.plannedObstacles = obstaclePlan.plannedObstacles;
+    return true;
 }
 
 function passesStageComfortPolicy(stageData, validation) {
@@ -1779,11 +2047,13 @@ function runStageVerificationSuite(stageData) {
     const obstacleValidation = validateStage(stageData, stageData.obstacles || []);
     const comfort = stageData.comfort || passesStageComfortPolicy(stageData, obstacleValidation);
     const criticalPath = obstacleValidation.valid ? summarizeCriticalPath(stageData, obstacleValidation) : null;
+    const testerSquad = stageData.testerSquad || runTesterSquad(stageData, obstacleValidation);
 
     return {
         geometryValidation,
         obstacleValidation,
         comfort,
+        testerSquad,
         criticalPath,
         watchdogMargin: stageData.isTimeTrial && obstacleValidation.valid
             ? stageData.timeLimit - obstacleValidation.shortestEta
@@ -1795,6 +2065,7 @@ function fitValidatedVariant(stageData) {
     let obstacles = stageData.plannedObstacles.slice().sort((a, b) => b.threat - a.threat);
     let validation = validateStage(stageData, obstacles);
     let removedBugs = 0;
+    let redesigns = 0;
 
     while (!validation.valid && obstacles.length) {
         obstacles.shift();
@@ -1802,25 +2073,52 @@ function fitValidatedVariant(stageData) {
         validation = validateStage(stageData, obstacles);
     }
 
-    const comfort = passesStageComfortPolicy(stageData, validation);
+    let comfort = passesStageComfortPolicy(stageData, validation);
+    let testerSquad = runTesterSquad(stageData, validation);
+
+    while (validation.valid && redesigns < 2 && (!comfort.ok || !testerSquad.ok)) {
+        const changed = rebalanceStageRoute(stageData, validation, testerSquad);
+        if (!changed) break;
+
+        redesigns++;
+        obstacles = stageData.plannedObstacles.slice().sort((a, b) => b.threat - a.threat);
+        removedBugs = 0;
+        validation = validateStage(stageData, obstacles);
+
+        while (!validation.valid && obstacles.length) {
+            obstacles.shift();
+            removedBugs++;
+            validation = validateStage(stageData, obstacles);
+        }
+
+        comfort = passesStageComfortPolicy(stageData, validation);
+        testerSquad = runTesterSquad(stageData, validation);
+    }
 
     return {
-        valid: validation.valid && comfort.ok,
+        valid: validation.valid && comfort.ok && testerSquad.ok,
         obstacles,
         removedBugs,
         validation,
         comfort,
+        testerSquad,
+        redesigns,
     };
 }
 
 function buildSafeFallbackStage(stageIndex, aiSummary) {
-    const candidateIds = stageIndex <= 2
+    const blueprint = getExternalStageBlueprint(stageIndex);
+    const candidateIds = [
+        blueprint?.fallbackArchetypeId,
+        blueprint?.archetypeId,
+        ...(stageIndex <= 2
         ? ['intro-flats', 'recovery-floor']
         : stageIndex <= 4
             ? ['step-up', 'intro-flats', 'recovery-floor', 'split-route']
             : stageIndex <= 6
                 ? ['split-route', 'step-up', 'low-tunnel', 'intro-flats', 'recovery-floor']
-                : [SAFE_FALLBACK_ARCHETYPE_ID, 'intro-flats', 'step-up'];
+                : [SAFE_FALLBACK_ARCHETYPE_ID, 'intro-flats', 'step-up'])
+    ].filter((value, index, list) => value && list.indexOf(value) === index);
 
     let lastCandidate = null;
     for (const archetypeId of candidateIds) {
@@ -1837,10 +2135,11 @@ function buildSafeFallbackStage(stageIndex, aiSummary) {
         candidate.meta.removedBugs = 0;
         candidate.validation = validateStage(candidate, []);
         candidate.comfort = passesStageComfortPolicy(candidate, candidate.validation);
+        candidate.testerSquad = runTesterSquad(candidate, candidate.validation);
         candidate.obstacles = [];
         lastCandidate = candidate;
 
-        if (candidate.validation.valid && candidate.comfort.ok) {
+        if (candidate.validation.valid && candidate.comfort.ok && candidate.testerSquad.ok) {
             return candidate;
         }
     }
@@ -1859,9 +2158,11 @@ function buildValidatedStage(stageIndex) {
 
     if (fitted.valid) {
         stageData.meta.removedBugs = fitted.removedBugs;
+        stageData.meta.redesigns = fitted.redesigns;
         stageData.meta.validationAttempts = fitted.removedBugs + 1;
         stageData.validation = fitted.validation;
         stageData.comfort = fitted.comfort;
+        stageData.testerSquad = fitted.testerSquad;
         stageData.obstacles = fitted.obstacles;
         return stageData;
     }
@@ -1874,15 +2175,17 @@ function buildValidatedStage(stageIndex) {
 
     if (fitted.valid) {
         stageData.meta.removedBugs = fitted.removedBugs;
+        stageData.meta.redesigns = fitted.redesigns;
         stageData.meta.validationAttempts = fitted.removedBugs + 1;
         stageData.validation = fitted.validation;
         stageData.comfort = fitted.comfort;
+        stageData.testerSquad = fitted.testerSquad;
         stageData.obstacles = fitted.obstacles;
         return stageData;
     }
 
     const safeFallback = buildSafeFallbackStage(stageIndex, aiSummary);
-    if (!safeFallback.validation.valid) {
+    if (!safeFallback.validation.valid || !safeFallback.comfort.ok || !safeFallback.testerSquad.ok) {
         logConsole(`[ERROR]: Safe fallback failed for stage ${stageIndex}.`, 'error');
     }
     return safeFallback;
@@ -2000,6 +2303,7 @@ function showLoadingScreen(stageIndex, callback) {
     const geometryEtaLabel = Number.isFinite(verification.geometryValidation.shortestEta) ? verification.geometryValidation.shortestEta.toFixed(2) : 'n/a';
     const marginLabel = Number.isFinite(verification.watchdogMargin) ? verification.watchdogMargin.toFixed(2) : null;
     const pathSummary = verification.criticalPath;
+    const testerSummary = verification.testerSquad.summary || `${verification.testerSquad.passCount}/${verification.testerSquad.requiredPasses}`;
     const messages = [
         { t: 0 * LOADING_STEP_MS, text: `$ hotfix build stage_${String(stageIndex).padStart(3, '0')} --archetype ${result.archetypeId}`, cls: 'lt-info' },
         { t: 1 * LOADING_STEP_MS, text: `[COMPILER]: Loading archetype ${result.archetypeName}...`, cls: 'lt-system', pct: 10 },
@@ -2011,8 +2315,18 @@ function showLoadingScreen(stageIndex, callback) {
         { t: 7 * LOADING_STEP_MS, text: `[TESTER-1]: Geometry route OK (${geometryEtaLabel}s obstacle-free ETA)`, cls: 'lt-system', pct: 66 },
         { t: 8 * LOADING_STEP_MS, text: `[TESTER-2]: Obstacle route OK (${shortestEtaLabel}s live ETA)`, cls: 'lt-success', pct: 78 },
         { t: 9 * LOADING_STEP_MS, text: `[TESTER-3]: Comfort gate ${verification.comfort.ok ? 'PASS' : 'FAIL'}${pathSummary ? ` | steps ${pathSummary.steps} | gap ${Math.round(pathSummary.maxGap)} | rise ${Math.round(pathSummary.maxRise)}` : ''}`, cls: verification.comfort.ok ? 'lt-success' : 'lt-error', pct: 88 },
-        { t: 10 * LOADING_STEP_MS, text: `[SYSTEM]: Stage ${stageIndex} ready. Deploying runtime...`, cls: 'lt-success', pct: 100 },
+        { t: 10 * LOADING_STEP_MS, text: `[TESTER-4]: Squad ${verification.testerSquad.ok ? 'PASS' : 'FAIL'} (${testerSummary})`, cls: verification.testerSquad.ok ? 'lt-success' : 'lt-error', pct: 95 },
+        { t: 11 * LOADING_STEP_MS, text: `[SYSTEM]: Stage ${stageIndex} ready. Deploying runtime...`, cls: 'lt-success', pct: 100 },
     ];
+
+    if (result.blueprint) {
+        messages.splice(5, 0, {
+            t: 4.5 * LOADING_STEP_MS,
+            text: `[PY-AI]: Blueprint ${result.blueprint.id} via ${result.blueprintProvider || 'external-library'}`,
+            cls: 'lt-ai',
+            pct: 42,
+        });
+    }
 
     if (result.isTimeTrial) {
         messages.splice(6, 0, {
@@ -2029,6 +2343,24 @@ function showLoadingScreen(stageIndex, callback) {
             text: `[VALIDATOR]: Removed ${result.meta.removedBugs} bug(s) to preserve a valid route.`,
             cls: 'lt-warning',
             pct: 84,
+        });
+    }
+
+    if (result.meta.removedPlatforms > 0) {
+        messages.splice(messages.length - 2, 0, {
+            t: 8.2 * LOADING_STEP_MS,
+            text: `[TESTER-2B]: Pruned ${result.meta.removedPlatforms} unreachable platform(s) from this build.`,
+            cls: 'lt-warning',
+            pct: 82,
+        });
+    }
+
+    if (result.meta.redesigns > 0) {
+        messages.splice(messages.length - 2, 0, {
+            t: 8.35 * LOADING_STEP_MS,
+            text: `[DIRECTOR]: Tester squad forced ${result.meta.redesigns} route redesign pass(es).`,
+            cls: 'lt-warning',
+            pct: 83,
         });
     }
 
@@ -2430,6 +2762,12 @@ function startRun() {
     logConsole(`[SYSTEM]: === STAGE ${currentStage}${isTimeTrial ? ' [LIMITED TIME]' : ''} ===`, 'system');
     logConsole(`[AI]: Director ${currentStageData.variantName} | Archetype ${currentStageData.archetypeName}`, 'ai');
     logConsole(`[SYSTEM]: Budget ${currentStageData.bugBudget} | Live ${aiObstacles.length} | Seed ${currentStageData.director.variantCode}`, 'system');
+    if (currentStageData.blueprint) {
+        logConsole(`[PY-AI]: ${currentStageData.blueprint.id} via ${currentStageData.blueprintProvider || 'external-library'}`, 'ai');
+    }
+    if (currentStageData.testerSquad) {
+        logConsole(`[TESTER]: Squad ${currentStageData.testerSquad.passCount}/${currentStageData.testerSquad.requiredPasses} -> ${currentStageData.testerSquad.summary}`, 'success');
+    }
     if (isTimeTrial) {
         logConsole(`[WARNING]: LIMITED TIME STAGE - clear in ${timeLimit}s.`, 'warning');
     }
