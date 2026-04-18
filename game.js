@@ -258,6 +258,7 @@ let maxDistanceThisRun = 0;
 let currentStageData = null;
 let lastArchetypeId = null;
 let lastEncouragementIndex = -1;
+let adminMode = false; // 🎮 Admin mode: handle = 'admin12321' → hazards disabled, auto-win
 let userSettings = loadUserSettings();
 let introState = loadIntroState();
 let abilityState = createAbilityState();
@@ -3516,15 +3517,19 @@ function updatePlayer() {
 
     for (const obstacle of aiObstacles) {
         if (aabb(player.x + 2, player.y + 2, player.width - 4, player.height - 4, obstacle.x, obstacle.y, obstacle.w, obstacle.h)) {
-            playerDeath(obstacle.type);
-            return;
+            if (!adminMode) {  // 🎮 ADMIN: Skip death on hazard
+                playerDeath(obstacle.type);
+                return;
+            }
         }
     }
 
     for (const projectile of obstacleProjectiles) {
         if (aabb(player.x + 2, player.y + 2, player.width - 4, player.height - 4, projectile.x, projectile.y, projectile.w, projectile.h)) {
-            playerDeath('projectile');
-            return;
+            if (!adminMode) {  // 🎮 ADMIN: Skip death on projectile
+                playerDeath('projectile');
+                return;
+            }
         }
     }
 
@@ -3534,7 +3539,12 @@ function updatePlayer() {
     }
 
     if (player.y > canvas.height + 60) {
-        playerDeath('void');
+        if (adminMode) {  // 🎮 ADMIN: Auto-win on fall
+            logConsole('[ADMIN]: Auto-win triggered (void in test mode)', 'warning');
+            playerWin();
+        } else {
+            playerDeath('void');
+        }
         return;
     }
 
@@ -3556,7 +3566,12 @@ function updatePlayer() {
     if (player.x > maxDistanceThisRun) maxDistanceThisRun = player.x;
 
     if (isTimeTrial && timeLimit > 0 && currentTime / 1000 > timeLimit) {
-        playerDeath('timeout');
+        if (adminMode) {  // 🎮 ADMIN: Auto-win on timeout
+            logConsole('[ADMIN]: Auto-win triggered (timeout in test mode)', 'warning');
+            playerWin();
+        } else {
+            playerDeath('timeout');
+        }
     }
 }
 
@@ -3660,12 +3675,20 @@ function resetCampaignState() {
     abilityState = createAbilityState();
     resetAnalytics();
     resetAIProfile();
+    adminMode = false; // Reset admin mode on new campaign
 }
 
 function startGame() {
     if (gameState !== 'title') return;
 
     playerName = (playerNameInput.value.trim() || 'anonymous').substring(0, 16);
+    
+    // 🔑 CHECK ADMIN MODE
+    adminMode = playerNameInput.value.trim() === 'admin12321';
+    if (adminMode) {
+        logConsole('[ADMIN]: 🎮 Cheat mode enabled. Hazards disabled, auto-win on void/timeout.', 'warning');
+    }
+    
     localStorage.setItem('hotfix_player_name', playerName);
     beginCampaignRun();
     audioManager.unlock();
