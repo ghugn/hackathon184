@@ -89,6 +89,13 @@ const INTRO_COPY = {
             body: 'You now get one extra jump in the air. Use it to recover late or take harder lines.',
         },
     },
+    drones: {
+        drone: {
+            title: 'NEW THREAT',
+            subtitle: 'PATROL DRONE',
+            body: 'Flying drones track your position and fire shots. Keep moving and use dash to dodge.',
+        },
+    },
 };
 const EXTERNAL_STAGE_LIBRARY = window.AI_STAGE_LIBRARY && Array.isArray(window.AI_STAGE_LIBRARY.blueprints)
     ? window.AI_STAGE_LIBRARY
@@ -310,6 +317,8 @@ let platforms = [];
 let goal = { x: 0, y: 0, w: 40, h: 50 };
 let aiObstacles = [];
 let obstacleProjectiles = [];
+let drones = [];
+let droneProjectiles = [];
 
 // ============================================
 // SECTION 8: AI ANALYTICS
@@ -364,9 +373,14 @@ function applySettingsToMenu() {
     if (abilityAlertToggle) abilityAlertToggle.checked = !!userSettings.abilityAlerts;
 }
 
-function loadIntroState() {
+function getIntroStateKey(name) {
+    return INTRO_STATE_KEY + '_' + (name || 'anonymous');
+}
+
+function loadIntroState(name) {
     try {
-        const stored = localStorage.getItem(INTRO_STATE_KEY);
+        const key = getIntroStateKey(name);
+        const stored = localStorage.getItem(key);
         const parsed = stored ? JSON.parse(stored) : {};
         return {
             obstacles: { ...(parsed.obstacles || {}) },
@@ -382,7 +396,8 @@ function loadIntroState() {
 
 function saveIntroState() {
     try {
-        localStorage.setItem(INTRO_STATE_KEY, JSON.stringify(introState));
+        const key = getIntroStateKey(playerName);
+        localStorage.setItem(key, JSON.stringify(introState));
     } catch {
         // Ignore storage failures.
     }
@@ -3211,6 +3226,198 @@ function updateDynamicObstacles() {
 }
 
 // ============================================
+// SECTION 10B: DRONE SYSTEM
+// ============================================
+const DRONE_START_STAGE = 1;
+const DRONE_COLOR = '#ff4488';
+const DRONE_BULLET_COLOR = '#ff66aa';
+const DRONE_SIZE = 18;
+const DRONE_FLOAT_SPEED = 0.8;
+const DRONE_TRACK_SPEED = 0.015;
+const DRONE_HOVER_HEIGHT = 90;
+const DRONE_BULLET_SPEED = 4.5;
+const DRONE_BULLET_SIZE = 8;
+
+function getDroneCount(stageIndex) {
+    if (stageIndex < DRONE_START_STAGE) return 0;
+    return 1 + Math.floor((stageIndex - DRONE_START_STAGE) / 10);
+}
+
+function getDroneFireRate(stageIndex) {
+    // Frames between shots. Gets faster with stage.
+    const base = 180;
+    const reduction = Math.min(120, (stageIndex - DRONE_START_STAGE) * 4);
+    return Math.max(60, base - reduction);
+}
+
+function spawnDrones(stageIndex, stageData) {
+    const count = getDroneCount(stageIndex);
+    if (count <= 0) return [];
+
+    const droneList = [];
+    for (let i = 0; i < count; i++) {
+        const spawnX = stageData.spawn.x + 200 + (i * levelWidth / (count + 1));
+        droneList.push({
+            x: clamp(spawnX, stageData.spawn.x + 100, levelWidth - 100),
+            y: 60 + i * 30,
+            targetX: 0,
+            targetY: 0,
+            floatPhase: Math.random() * Math.PI * 2,
+            fireTimer: Math.floor(Math.random() * getDroneFireRate(stageIndex)),
+            fireRate: getDroneFireRate(stageIndex),
+            bulletSpeed: DRONE_BULLET_SPEED + Math.min(stageIndex - DRONE_START_STAGE, 20) * 0.08,
+            size: DRONE_SIZE,
+            active: true,
+        });
+    }
+    return droneList;
+}
+
+function updateDrones() {
+    if (!drones.length) return;
+
+    const playerCenterX = player.x + player.width / 2;
+    const playerCenterY = player.y + player.height / 2;
+
+    for (const drone of drones) {
+        if (!drone.active) continue;
+
+        // Track player with smooth lerp, hover above
+        drone.targetX = playerCenterX + Math.sin(frameCount * 0.005 + drone.floatPhase) * 80;
+        drone.targetY = playerCenterY - DRONE_HOVER_HEIGHT + Math.cos(frameCount * 0.008 + drone.floatPhase) * 20;
+        drone.targetY = clamp(drone.targetY, 30, canvas.height - 80);
+
+        drone.x += (drone.targetX - drone.x) * DRONE_TRACK_SPEED;
+        drone.y += (drone.targetY - drone.y) * DRONE_TRACK_SPEED;
+
+        // Float bobbing
+        drone.y += Math.sin(frameCount * 0.04 + drone.floatPhase) * DRONE_FLOAT_SPEED;
+
+        // Firing
+        drone.fireTimer++;
+        if (drone.fireTimer >= drone.fireRate) {
+            drone.fireTimer = 0;
+            fireDroneBullet(drone, playerCenterX, playerCenterY);
+        }
+    }
+
+    // Update drone projectiles
+    droneProjectiles = droneProjectiles.filter(p => {
+        p.x += p.vx;
+        p.y += p.vy;
+        p.travelled += Math.sqrt(p.vx * p.vx + p.vy * p.vy);
+        return p.travelled <= p.maxDistance &&
+            p.x >= -50 && p.x <= levelWidth + 50 &&
+            p.y >= -50 && p.y <= canvas.height + 100;
+    });
+}
+
+function fireDroneBullet(drone, targetX, targetY) {
+    const dx = targetX - drone.x;
+    const dy = targetY - drone.y;
+    const dist = Math.max(1, Math.sqrt(dx * dx + dy * dy));
+    const vx = (dx / dist) * drone.bulletSpeed;
+    const vy = (dy / dist) * drone.bulletSpeed;
+
+    droneProjectiles.push({
+        x: drone.x,
+        y: drone.y + drone.size / 2,
+        w: DRONE_BULLET_SIZE,
+        h: DRONE_BULLET_SIZE,
+        vx,
+        vy,
+        travelled: 0,
+        maxDistance: 500,
+    });
+
+    // Muzzle flash particles
+    spawnParticle(drone.x, drone.y + drone.size / 2, vx * 0.3, vy * 0.3, DRONE_BULLET_COLOR, 12, 2);
+}
+
+function drawDrones() {
+    for (const drone of drones) {
+        if (!drone.active) continue;
+        const sx = drone.x - camera.x;
+        const sy = drone.y;
+        if (sx + drone.size < -30 || sx - drone.size > canvas.width + 30) continue;
+
+        const pulse = Math.sin(frameCount * 0.06 + drone.floatPhase) * 0.15 + 0.85;
+
+        // Glow
+        ctx.globalAlpha = 0.15 * pulse;
+        ctx.fillStyle = DRONE_COLOR;
+        ctx.beginPath();
+        ctx.arc(sx, sy + drone.size / 2, drone.size * 1.5, 0, Math.PI * 2);
+        ctx.fill();
+
+        // Body (diamond shape)
+        ctx.globalAlpha = 0.9;
+        ctx.fillStyle = '#1a1a2e';
+        ctx.strokeStyle = DRONE_COLOR;
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.moveTo(sx, sy);
+        ctx.lineTo(sx + drone.size * 0.6, sy + drone.size / 2);
+        ctx.lineTo(sx, sy + drone.size);
+        ctx.lineTo(sx - drone.size * 0.6, sy + drone.size / 2);
+        ctx.closePath();
+        ctx.fill();
+        ctx.stroke();
+
+        // Inner eye (targeting indicator)
+        ctx.globalAlpha = pulse;
+        ctx.fillStyle = DRONE_COLOR;
+        ctx.beginPath();
+        ctx.arc(sx, sy + drone.size / 2, 3, 0, Math.PI * 2);
+        ctx.fill();
+
+        // Rotor lines
+        const rotorAngle = frameCount * 0.15 + drone.floatPhase;
+        ctx.globalAlpha = 0.5;
+        ctx.strokeStyle = DRONE_BULLET_COLOR;
+        ctx.lineWidth = 1;
+        const rotorLen = drone.size * 0.7;
+        ctx.beginPath();
+        ctx.moveTo(sx + Math.cos(rotorAngle) * rotorLen, sy - 2 + Math.sin(rotorAngle) * 3);
+        ctx.lineTo(sx - Math.cos(rotorAngle) * rotorLen, sy - 2 - Math.sin(rotorAngle) * 3);
+        ctx.stroke();
+
+        ctx.globalAlpha = 1;
+    }
+}
+
+function drawDroneProjectiles() {
+    for (const p of droneProjectiles) {
+        const sx = p.x - camera.x;
+        const sy = p.y;
+        if (sx + p.w < -20 || sx > canvas.width + 20) continue;
+
+        // Glow trail
+        ctx.globalAlpha = 0.2;
+        ctx.fillStyle = DRONE_BULLET_COLOR;
+        ctx.beginPath();
+        ctx.arc(sx + p.w / 2, sy + p.h / 2, p.w, 0, Math.PI * 2);
+        ctx.fill();
+
+        // Core
+        ctx.globalAlpha = 1;
+        ctx.fillStyle = DRONE_BULLET_COLOR;
+        ctx.beginPath();
+        ctx.arc(sx + p.w / 2, sy + p.h / 2, p.w / 2, 0, Math.PI * 2);
+        ctx.fill();
+
+        // Bright center
+        ctx.fillStyle = '#ffffff';
+        ctx.globalAlpha = 0.8;
+        ctx.beginPath();
+        ctx.arc(sx + p.w / 2, sy + p.h / 2, p.w / 4, 0, Math.PI * 2);
+        ctx.fill();
+
+        ctx.globalAlpha = 1;
+    }
+}
+
+// ============================================
 // SECTION 11: PARTICLES
 // ============================================
 let particles = [];
@@ -3338,6 +3545,20 @@ function collectStageEntryAlerts(stageData) {
             body: 'This stage is slightly kinder on layout, but the watchdog will kill the run if you slow down.',
             duration: STAGE_ALERT_DURATION,
         });
+    }
+
+    // Drone intro alert
+    if (userSettings.obstacleAlerts && currentStage >= 10) {
+        const copy = INTRO_COPY.drones?.drone;
+        if (copy && !(introState.drones && introState.drones.drone)) {
+            markIntroSeen('drones', 'drone');
+            alerts.push({
+                ...copy,
+                duration: FIRST_TIME_ALERT_DURATION,
+            });
+        }
+    } else if (currentStage >= DRONE_START_STAGE) {
+        if (INTRO_COPY.drones?.drone) markIntroSeen('drones', 'drone');
     }
 
     return alerts;
@@ -3509,6 +3730,7 @@ function updatePlayer() {
     const wasOnGround = player.onGround;
     const verticalSpeedBeforeStep = player.vy;
     updateDynamicObstacles();
+    updateDrones();
     let inputX = 0;
     if (keys.a || keys.arrowleft) inputX -= 1;
     if (keys.d || keys.arrowright) inputX += 1;
@@ -3665,8 +3887,18 @@ function updatePlayer() {
 
     for (const projectile of obstacleProjectiles) {
         if (aabb(player.x + 2, player.y + 2, player.width - 4, player.height - 4, projectile.x, projectile.y, projectile.w, projectile.h)) {
-            if (!adminMode) {  // 🎮 ADMIN: Skip death on projectile
+            if (!adminMode) {
                 playerDeath('projectile');
+                return;
+            }
+        }
+    }
+
+    // Drone projectile collision
+    for (const projectile of droneProjectiles) {
+        if (aabb(player.x + 2, player.y + 2, player.width - 4, player.height - 4, projectile.x, projectile.y, projectile.w, projectile.h)) {
+            if (!adminMode) {
+                playerDeath('drone');
                 return;
             }
         }
@@ -3742,6 +3974,7 @@ function playerDeath(cause) {
         turret: 'Tagged by a Sentry Turret. Runtime punctured.',
         crawler: 'Pinned by a Moving Crawler. Route collapsed.',
         projectile: 'Shot by a live round. Thread terminated.',
+        drone: 'Locked by Patrol Drone. Air superiority denied.',
         void: 'Segmentation fault. Player fell out of scope.',
         timeout: `Process timed out after ${timeLimit}s. Killed by watchdog.`,
     };
@@ -3807,6 +4040,8 @@ function resetCampaignState() {
     platforms = [];
     aiObstacles = [];
     obstacleProjectiles = [];
+    drones = [];
+    droneProjectiles = [];
     currentPath = [];
     particles = [];
     maxDistanceThisRun = 0;
@@ -3824,6 +4059,8 @@ function startGame() {
     const isAdmin = playerNameInput.value.trim() === 'admin12321';
     
     localStorage.setItem('hotfix_player_name', playerName);
+    // Reload intro state for this handle (new handle = fresh alerts)
+    introState = loadIntroState(playerName);
     beginCampaignRun();
     audioManager.unlock();
     audioManager.playStart();
@@ -3868,6 +4105,8 @@ function applyStageResult(stageData) {
     stageData.justUnlockedAbilities = justUnlockedAbilities;
     aiObstacles = stageData.obstacles.map(instantiateRuntimeObstacle);
     obstacleProjectiles = [];
+    drones = spawnDrones(currentStage, stageData);
+    droneProjectiles = [];
     currentPath = [];
     previousPaths = [];
     lastArchetypeId = stageData.archetypeId;
@@ -3925,6 +4164,9 @@ function startRun() {
     }
     if (isTimeTrial) {
         logConsole(`[WARNING]: LIMITED TIME STAGE - clear in ${timeLimit}s.`, 'warning');
+    }
+    if (drones.length > 0) {
+        logConsole(`[THREAT]: ${drones.length} Patrol Drone(s) deployed. Watch the skies.`, 'warning');
     }
 }
 
@@ -4825,6 +5067,8 @@ function draw() {
     drawGoal();
     drawObstacles();
     drawObstacleProjectiles();
+    drawDrones();
+    drawDroneProjectiles();
     drawPlayer();
     drawParticles();
     drawMinimap();
